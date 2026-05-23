@@ -15,11 +15,33 @@ public class Product {
     @Column(nullable = false)
     private String name;
 
+    private String category;
+
+    @Column(length = 1000)
+    private String description;
+
     @Column(nullable = false)
-    private BigDecimal originalPrice;
+    private String unit;
+
+    @Column(nullable = false)
+    private BigDecimal basePrice;
 
     @Column(nullable = false)
     private BigDecimal groupPrice;
 
-    private String category;
+    @Column(nullable = false)
+    private Integer totalStockQuantity;
+
+    @Column(nullable = false)
+    private Integer minOrderQuantity;
+
+    @Column(nullable = false)
+    private Integer availableQuantity;
+
+    private String deliveryTimeEstimate;
+
+    private Integer batchSize;
+
+    @Column(nullable = false)
+    private Long supplierId;
 }

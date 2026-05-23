@@ -14,6 +14,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/auth")
+@CrossOrigin(origins = "*")
 public class AuthController {
 
     @Autowired
@@ -34,6 +35,7 @@ public class AuthController {
         User user = new User();
         user.setUsername(request.get("username"));
         user.setPassword(passwordEncoder.encode(request.get("password")));
+        user.setLocation(request.getOrDefault("location", "Mumbai")); // Default location for demo
         
         try {
             user.setRole(Role.valueOf(request.get("role").toUpperCase()));
@@ -54,6 +56,9 @@ public class AuthController {
             String token = jwtUtil.generateToken(user.getUsername(), user.getRole().name());
             Map<String, String> response = new HashMap<>();
             response.put("token", token);
+            response.put("username", user.getUsername());
+            response.put("role", user.getRole().name());
+            response.put("userId", String.valueOf(user.getId()));
             return ResponseEntity.ok(response);
         }
         return ResponseEntity.status(401).body("Invalid credentials");

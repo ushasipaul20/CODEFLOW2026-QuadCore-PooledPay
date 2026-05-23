@@ -20,4 +20,6 @@ public class User {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Role role;
+
+    private String location; // Grouping by city/pin code for pooling
 }
