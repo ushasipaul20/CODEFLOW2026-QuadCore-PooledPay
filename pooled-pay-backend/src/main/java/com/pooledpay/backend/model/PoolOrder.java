@@ -31,5 +31,9 @@ public class PoolOrder {
 
     private String category;
 
+    private String paymentStatus;
+
+    private String deliveryCode;
+
     private LocalDateTime createdAt = LocalDateTime.now();
 }

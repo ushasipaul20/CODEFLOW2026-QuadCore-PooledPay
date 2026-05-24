@@ -172,6 +172,28 @@ export async function updatePoolStatus(poolId, statusPayload) {
   }, null);
 }
 
+/** PATCH /api/pools/:id/admin-approve — admin approves and pays supplier */
+export async function adminApproveOrder(poolId) {
+  return safeFetch(`/api/pools/${poolId}/admin-approve`, {
+    method: 'PATCH',
+  }, null);
+}
+
+/** PATCH /api/pools/:id/ship — supplier ships the order */
+export async function shipOrder(poolId) {
+  return safeFetch(`/api/pools/${poolId}/ship`, {
+    method: 'PATCH',
+  }, null);
+}
+
+/** POST /api/pools/:id/confirm-delivery — retailer confirms delivery with code */
+export async function confirmDelivery(poolId, deliveryCode) {
+  return safeFetch(`/api/pools/${poolId}/confirm-delivery`, {
+    method: 'POST',
+    body: JSON.stringify({ deliveryCode }),
+  }, null);
+}
+
 // ────────────────────── SUPPLIERS ────────────────────────────────
 
 /** GET /api/supplier/list — all registered supplier profiles */

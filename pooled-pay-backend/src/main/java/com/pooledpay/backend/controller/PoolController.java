@@ -84,8 +84,10 @@ public class PoolController {
         if (poolOrder.getCurrentQuantity() >= product.getMinOrderQuantity()) {
             poolOrder.setStatus("FULFILLED");
             poolOrder.setSupplierId(product.getSupplierId());
-            poolOrder.setSupplierStatus("PENDING");
+            poolOrder.setSupplierStatus("PENDING_ADMIN_APPROVAL");
             poolOrder.setDeliveryStatus("PREPARING");
+            poolOrder.setPaymentStatus("PENDING");
+            poolOrder.setDeliveryCode(String.format("%06d", new java.util.Random().nextInt(1000000)));
         }
 
         // Deduct available stock
@@ -104,6 +106,40 @@ public class PoolController {
             if (body.containsKey("deliveryStatus")) pool.setDeliveryStatus(body.get("deliveryStatus"));
             if (body.containsKey("supplierId"))     pool.setSupplierId(Long.valueOf(body.get("supplierId")));
             return ResponseEntity.ok(poolOrderRepository.save(pool));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    // Admin approves request and pays supplier
+    @PatchMapping("/{poolId}/admin-approve")
+    public ResponseEntity<?> adminApprove(@PathVariable Long poolId) {
+        return poolOrderRepository.findById(poolId).map(pool -> {
+            pool.setSupplierStatus("ADMIN_APPROVED");
+            pool.setPaymentStatus("PAID_TO_SUPPLIER");
+            return ResponseEntity.ok(poolOrderRepository.save(pool));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    // Supplier starts shipment
+    @PatchMapping("/{poolId}/ship")
+    public ResponseEntity<?> shipOrder(@PathVariable Long poolId) {
+        return poolOrderRepository.findById(poolId).map(pool -> {
+            pool.setDeliveryStatus("SHIPPED");
+            return ResponseEntity.ok(poolOrderRepository.save(pool));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    // Retailer confirms delivery using unique code
+    @PostMapping("/{poolId}/confirm-delivery")
+    public ResponseEntity<?> confirmDelivery(@PathVariable Long poolId, @RequestBody Map<String, String> body) {
+        String code = body.get("deliveryCode");
+        return poolOrderRepository.findById(poolId).map(pool -> {
+            if (pool.getDeliveryCode() != null && pool.getDeliveryCode().equals(code)) {
+                pool.setStatus("COMPLETED");
+                pool.setDeliveryStatus("DELIVERED");
+                pool.setSupplierStatus("COMPLETED");
+                return ResponseEntity.ok(poolOrderRepository.save(pool));
+            }
+            return ResponseEntity.badRequest().body("Invalid delivery code");
         }).orElse(ResponseEntity.notFound().build());
     }
 }
