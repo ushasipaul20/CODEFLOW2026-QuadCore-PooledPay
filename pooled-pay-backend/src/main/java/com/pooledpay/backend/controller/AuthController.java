@@ -12,6 +12,12 @@ import org.springframework.web.bind.annotation.*;
 import java.util.HashMap;
 import java.util.Map;
 
+import com.pooledpay.backend.model.PasswordResetToken;
+import com.pooledpay.backend.repository.PasswordResetTokenRepository;
+import com.pooledpay.backend.service.EmailService;
+import java.util.UUID;
+import java.util.Optional;
+
 @RestController
 @RequestMapping("/api/auth")
 @CrossOrigin(origins = "*")
@@ -26,14 +32,24 @@ public class AuthController {
     @Autowired
     private JwtUtil jwtUtil;
 
+    @Autowired
+    private PasswordResetTokenRepository tokenRepository;
+
+    @Autowired
+    private EmailService emailService;
+
     @PostMapping("/signup")
     public ResponseEntity<?> signup(@RequestBody Map<String, String> request) {
         if(userRepository.findByUsername(request.get("username")).isPresent()) {
             return ResponseEntity.badRequest().body("Username already exists");
         }
+        if(request.containsKey("email") && userRepository.findByEmail(request.get("email")).isPresent()) {
+            return ResponseEntity.badRequest().body("Email already exists");
+        }
 
         User user = new User();
         user.setUsername(request.get("username"));
+        user.setEmail(request.get("email")); // Can be null for existing logic
         user.setPassword(passwordEncoder.encode(request.get("password")));
         user.setLocation(request.getOrDefault("location", "Mumbai")); // Default location for demo
         
@@ -62,5 +78,64 @@ public class AuthController {
             return ResponseEntity.ok(response);
         }
         return ResponseEntity.status(401).body("Invalid credentials");
+    }
+
+    @PostMapping("/forgot-password")
+    public ResponseEntity<?> forgotPassword(@RequestBody Map<String, String> request) {
+        String email = request.get("email");
+        if (email == null || email.isEmpty()) {
+            return ResponseEntity.badRequest().body("Email is required");
+        }
+
+        Optional<User> userOpt = userRepository.findByEmail(email);
+        if (userOpt.isEmpty()) {
+            // Return ok to prevent email enumeration attacks
+            return ResponseEntity.ok("If an account exists with this email, a reset link has been sent.");
+        }
+
+        User user = userOpt.get();
+        // Delete any existing token for this user
+        tokenRepository.deleteByUser(user);
+
+        // Generate new token
+        String token = UUID.randomUUID().toString();
+        PasswordResetToken resetToken = new PasswordResetToken(token, user, 30); // 30 min expiry
+        tokenRepository.save(resetToken);
+
+        // Send email
+        emailService.sendPasswordResetEmail(user.getEmail(), token);
+
+        return ResponseEntity.ok("If an account exists with this email, a reset link has been sent.");
+    }
+
+    @PostMapping("/reset-password")
+    public ResponseEntity<?> resetPassword(@RequestBody Map<String, String> request) {
+        String token = request.get("token");
+        String newPassword = request.get("password");
+
+        if (token == null || newPassword == null) {
+            return ResponseEntity.badRequest().body("Token and password are required");
+        }
+
+        Optional<PasswordResetToken> tokenOpt = tokenRepository.findByToken(token);
+        if (tokenOpt.isEmpty()) {
+            return ResponseEntity.badRequest().body("Invalid or expired token");
+        }
+
+        PasswordResetToken resetToken = tokenOpt.get();
+        if (resetToken.isExpired()) {
+            tokenRepository.delete(resetToken);
+            return ResponseEntity.badRequest().body("Token has expired");
+        }
+
+        // Update user password
+        User user = resetToken.getUser();
+        user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+
+        // Delete token to prevent reuse
+        tokenRepository.delete(resetToken);
+
+        return ResponseEntity.ok("Password successfully reset. You can now log in.");
     }
 }

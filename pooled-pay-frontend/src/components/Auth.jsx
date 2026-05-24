@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { login as apiLogin, signup as apiSignup } from '../services/apiService';
 
 // ── Mock demo accounts ───────────────────────────────────────────
 const DEMO_ACCOUNTS = {
@@ -26,6 +27,7 @@ function FloatingOrbs() {
 
 export default function Auth({ type }) {
   const [username, setUsername] = useState('');
+  const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole]         = useState('RETAILER');
   const [location, setLocation] = useState('');
@@ -51,47 +53,31 @@ export default function Auth({ type }) {
     setLoading(true);
 
     try {
-      const url  = isLogin
-        ? 'http://localhost:8080/api/auth/login'
-        : 'http://localhost:8080/api/auth/signup';
-      const body = isLogin
-        ? { username, password }
-        : { username, password, role, location: location || 'Mumbai' };
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(4000),
-      });
-
-      if (res.ok) {
-        if (isLogin) {
-          const data = await res.json();
+      if (isLogin) {
+        const data = await apiLogin(username, password);
+        if (data && data.token) {
           saveSession(data.token, data.role, data.username, data.userId);
           navigate('/dashboard');
         } else {
-          // After signup, auto-login immediately
-          const loginRes = await fetch('http://localhost:8080/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password }),
-            signal: AbortSignal.timeout(4000),
-          });
-          if (loginRes.ok) {
-            const data = await loginRes.json();
-            saveSession(data.token, data.role, data.username, data.userId);
+          throw new Error('Invalid credentials');
+        }
+      } else {
+        const data = await apiSignup({ username, email, password, role, location: location || 'Mumbai' });
+        // After signup, auto-login immediately
+        try {
+          const loginData = await apiLogin(username, password);
+          if (loginData && loginData.token) {
+            saveSession(loginData.token, loginData.role, loginData.username, loginData.userId);
             navigate('/dashboard');
           } else {
             setSuccess('✅ Account created! Please sign in.');
             setTimeout(() => navigate('/login'), 1500);
           }
+        } catch {
+          setSuccess('✅ Account created! Please sign in.');
+          setTimeout(() => navigate('/login'), 1500);
         }
-        return;
       }
-      const msg = await res.text();
-      throw new Error(msg || 'Something went wrong');
-
     } catch (err) {
       // Demo fallback (backend offline)
       if (err.name === 'TimeoutError' || err.message.includes('fetch') || err.name === 'TypeError') {
@@ -170,8 +156,17 @@ export default function Auth({ type }) {
               <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Username</label>
               <input type="text" placeholder="e.g. john_pharma" className="input-field" value={username} onChange={e => setUsername(e.target.value)} required autoFocus />
             </div>
+            {!isLogin && (
+              <div>
+                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Email</label>
+                <input type="email" placeholder="e.g. john@example.com" className="input-field" value={email} onChange={e => setEmail(e.target.value)} required />
+              </div>
+            )}
             <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Password</label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Password</label>
+                {isLogin && <Link to="/forgot-password" style={{ fontSize: '0.82rem', color: 'var(--accent)', textDecoration: 'none' }}>Forgot Password?</Link>}
+              </div>
               <input type="password" placeholder="••••••••" className="input-field" value={password} onChange={e => setPassword(e.target.value)} required />
             </div>
 

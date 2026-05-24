@@ -1,6 +1,24 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+  fetchProducts as apiFetchProducts,
+  fetchPools as apiFetchPools,
+  fetchSupplierProducts as apiFetchSupplierProducts,
+  fetchSuppliers as apiFetchSuppliers,
+  placePoolOrder,
+  updatePoolStatus,
+  updateDeliveryStatus,
+  addProduct as apiAddProduct,
+  updateProduct as apiUpdateProduct,
+  deleteProduct as apiDeleteProduct,
+  fetchCopilotAssessment,
+  simulateCashflowEvent,
+  MOCK_PRODUCTS,
+  MOCK_POOLS,
+  MOCK_SUPPLIERS,
+  MOCK_CASHFLOW,
+} from '../services/apiService';
 
 // ─── ICONS (inline SVG — no extra dep) ──────────────────────────
 const Icon = {
@@ -41,35 +59,10 @@ function decodeJwt(token) {
   } catch { return null; }
 }
 
-// ─── MOCK DATA ───────────────────────────────────────────────────
-const MOCK_PRODUCTS = [
-  { id: 1, name: 'Paracetamol 500mg (Pack of 100)', category: 'Pharma', originalPrice: 240, groupPrice: 168, stock: 5000 },
-  { id: 2, name: 'Dettol Antiseptic Liquid 500ml', category: 'FMCG', originalPrice: 185, groupPrice: 130, stock: 2000 },
-  { id: 3, name: 'Azithromycin 250mg (Pack of 10)', category: 'Pharma', originalPrice: 320, groupPrice: 210, stock: 1500 },
-  { id: 4, name: 'ORS Electrolyte Sachets (Box/20)', category: 'Pharma', originalPrice: 140, groupPrice: 95, stock: 8000 },
-  { id: 5, name: 'Lifebuoy Soap Bar (12 pack)', category: 'FMCG', originalPrice: 280, groupPrice: 195, stock: 3000 },
-  { id: 6, name: 'Cetirizine 10mg (Strip of 10)', category: 'Pharma', originalPrice: 55, groupPrice: 38, stock: 6000 },
-];
-
-const MOCK_POOLS = [
-  { id: 101, productId: 1, status: 'ACTIVE', participantsCount: 7, deliveryStatus: null, createdAt: new Date(Date.now()-3600000*2).toISOString(), supplierId: null },
-  { id: 102, productId: 3, status: 'SUPPLIER_ASSIGNED', participantsCount: 12, deliveryStatus: 'PREPARING', createdAt: new Date(Date.now()-3600000*18).toISOString(), supplierId: 201 },
-  { id: 103, productId: 5, status: 'DELIVERED', participantsCount: 9, deliveryStatus: 'DELIVERED', createdAt: new Date(Date.now()-3600000*48).toISOString(), supplierId: 203 },
-];
-
-const MOCK_SUPPLIERS = [
-  { id: 201, name: 'PharmaCorp India', category: 'Pharma', rating: 4.8, activeOrdersCount: 2, capacity: 50 },
-  { id: 202, name: 'Global BioPharma', category: 'Pharma', rating: 4.5, activeOrdersCount: 0, capacity: 30 },
-  { id: 203, name: 'Apex FMCG Distributors', category: 'FMCG', rating: 4.9, activeOrdersCount: 4, capacity: 80 },
-  { id: 204, name: 'Medix Wholesale', category: 'Pharma', rating: 4.7, activeOrdersCount: 1, capacity: 40 },
-];
-
-const INITIAL_CASHFLOW = [
-  { type: 'INFLOW', description: 'Weekly Pharmacy Sales', amount: 52000, date: '2 days ago' },
-  { type: 'OUTFLOW', description: 'Monthly Supplier Payment', amount: 15000, date: '5 days ago' },
-  { type: 'INFLOW', description: 'OTC Counter Revenue', amount: 18000, date: '1 week ago' },
-  { type: 'OUTFLOW', description: 'Staff Salaries', amount: 22000, date: '1 week ago' },
-];
+// ─── MOCK DATA (imported from apiService.js) ────────────────────
+// MOCK_PRODUCTS, MOCK_POOLS, MOCK_SUPPLIERS, MOCK_CASHFLOW
+// are imported at the top from '../services/apiService'
+const INITIAL_CASHFLOW = MOCK_CASHFLOW;
 
 // ─── HELPERS ─────────────────────────────────────────────────────
 const statusColor = {
@@ -154,13 +147,11 @@ function CheckoutModal({ product, token, onClose, onSuccess }) {
     if (!succeed) { setResult({ ok: false }); return; }
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:8080/api/pools/order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ userId: localStorage.getItem('userId') || 1, productId: product.id, quantity: qty }),
-        signal: AbortSignal.timeout(3000),
+      await placePoolOrder({
+        userId: localStorage.getItem('userId') || 1,
+        productId: product.id,
+        quantity: qty,
       });
-      if (!res.ok) throw new Error();
     } catch { /* demo mode — proceed anyway */ }
     setLoading(false);
     setResult({ ok: true, total, saved, pct: savePct(product.originalPrice, product.groupPrice) });
@@ -324,23 +315,20 @@ function AddProductForm({ token, onSuccess }) {
         supplierId: uid ? Number(uid) : 1
       };
       console.log('[AddProduct] Submitting payload:', JSON.stringify(payload));
-      const res = await fetch('http://localhost:8080/api/products/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) {
-        const saved = await res.json();
+      const saved = await apiAddProduct(payload);
+      if (saved && saved.id) {
         console.log('[AddProduct] Saved:', saved);
         onSuccess(saved);
-      } else {
-        const errText = await res.text();
-        console.error('[AddProduct] Server error:', res.status, errText);
-        setError(`Server error (${res.status}): ${errText.slice(0, 200)}`);
+      } else if (saved === null) {
+        setError('Could not reach the backend server. Is it running on port 8080?');
       }
     } catch (err) {
-      console.error('[AddProduct] Network error:', err);
-      setError('Could not reach the backend server. Is it running on port 8080?');
+      console.error('[AddProduct] Error:', err);
+      if (err.status) {
+        setError(`Server error (${err.status}): ${err.message.slice(0, 200)}`);
+      } else {
+        setError('Could not reach the backend server. Is it running on port 8080?');
+      }
     }
     setLoading(false);
   };
@@ -610,7 +598,7 @@ export default function Dashboard() {
   const [products, setProducts]     = useState(MOCK_PRODUCTS);
   const [myProducts, setMyProducts] = useState([]);   // Supplier's own products
   const [pools, setPools]           = useState(MOCK_POOLS);
-  const [suppliers]                 = useState(MOCK_SUPPLIERS);
+  const [suppliers, setSuppliers]   = useState(MOCK_SUPPLIERS);
   const [loading, setLoading]       = useState(false);
   const [toast, setToast]           = useState('');
   const [editingProduct, setEditingProduct] = useState(null); // product being edited
@@ -637,31 +625,31 @@ export default function Dashboard() {
     setActiveTab(role === 'SUPPLIER' ? 'my-products' : role === 'ADMIN' ? 'admin' : 'marketplace');
   }, [token]);
 
-  // ── Data fetch (with mock fallback) ────────────────────────────
+  // ── Data fetch (via apiService — auto-fallback to mock) ────────
   const fetchData = useCallback(async () => {
     setLoading(true);
-    try {
-      const uid = localStorage.getItem('userId') || '1';
-      const storedRole = localStorage.getItem('userRole') || user.role;
+    const uid = localStorage.getItem('userId') || '1';
+    const storedRole = localStorage.getItem('userRole') || user.role;
 
-      const [pRes, poolRes] = await Promise.all([
-        fetch('http://localhost:8080/api/products', { signal: AbortSignal.timeout(3000) }),
-        fetch('http://localhost:8080/api/pools', { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(3000) }),
-      ]);
-      if (pRes.ok) {
-        const prodData = await pRes.json();
-        if (prodData.length > 0) setProducts(prodData);
-      }
-      if (poolRes.ok) {
-        const poolData = await poolRes.json();
-        if (poolData.length > 0) setPools(poolData);
-      }
-      // Fetch supplier's own products
-      if (storedRole === 'SUPPLIER') {
-        const myRes = await fetch(`http://localhost:8080/api/products/supplier/${uid}`, { signal: AbortSignal.timeout(3000) });
-        if (myRes.ok) setMyProducts(await myRes.json());
-      }
-    } catch { /* demo fallback */ }
+    const [prodData, poolData] = await Promise.all([
+      apiFetchProducts(),
+      apiFetchPools(),
+    ]);
+    if (prodData && prodData.length > 0) setProducts(prodData);
+    if (poolData && poolData.length > 0) setPools(poolData);
+
+    // Fetch supplier's own products
+    if (storedRole === 'SUPPLIER') {
+      const myData = await apiFetchSupplierProducts(uid);
+      if (myData) setMyProducts(myData);
+    }
+
+    // Fetch supplier profiles for admin
+    if (storedRole === 'ADMIN') {
+      const suppData = await apiFetchSuppliers();
+      if (suppData) setSuppliers(suppData);
+    }
+
     setLoading(false);
   }, [token, user.role]);
 
@@ -688,24 +676,33 @@ export default function Dashboard() {
 
   const handleJoinPool = async (poolId, productName) => {
     try {
-      await fetch(`http://localhost:8080/api/pools/join/${poolId}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(2000) });
-    } catch { /* demo */ }
+      await updatePoolStatus(poolId, { status: 'ACTIVE' }); // backend tracks join
+    } catch { /* demo fallback */ }
     setPools(prev => prev.map(p => p.id === poolId ? { ...p, participantsCount: p.participantsCount + 1 } : p));
     showToast(`🙌 Successfully joined pool for ${productName}!`);
   };
 
-  const adminStatusUpdate = (poolId, status) => {
+  const adminStatusUpdate = async (poolId, status) => {
+    try {
+      await updatePoolStatus(poolId, { status });
+    } catch { /* demo fallback */ }
     setPools(prev => prev.map(p => p.id === poolId ? { ...p, status } : p));
     showToast(`⚡ Pool #${poolId} status → ${status}`);
   };
 
-  const assignSupplier = (poolId, suppId, suppName) => {
+  const assignSupplier = async (poolId, suppId, suppName) => {
+    try {
+      await updatePoolStatus(poolId, { status: 'SUPPLIER_ASSIGNED', supplierId: String(suppId), deliveryStatus: 'PREPARING' });
+    } catch { /* demo fallback */ }
     setPools(prev => prev.map(p => p.id === poolId ? { ...p, status: 'SUPPLIER_ASSIGNED', supplierId: suppId, deliveryStatus: 'PREPARING' } : p));
     setAssignPool(null);
     showToast(`🚚 "${suppName}" assigned to Pool #${poolId}!`);
   };
 
-  const supplierStatusUpdate = (poolId, ds) => {
+  const supplierStatusUpdate = async (poolId, ds) => {
+    try {
+      await updateDeliveryStatus(poolId, ds);
+    } catch { /* demo fallback */ }
     setPools(prev => prev.map(p => p.id === poolId ? { ...p, deliveryStatus: ds, status: ds === 'DELIVERED' ? 'DELIVERED' : p.status } : p));
     showToast(`📦 Order status updated → ${ds}`);
   };
@@ -1087,15 +1084,12 @@ export default function Dashboard() {
                                 const newQty = prompt(`Update available quantity for "${prod.name}" (current: ${prod.availableQuantity}):`);
                                 if (newQty === null || isNaN(+newQty)) return;
                                 try {
-                                  const res = await fetch(`http://localhost:8080/api/products/${prod.id}`, {
-                                    method: 'PUT',
-                                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                                    body: JSON.stringify({ ...prod, availableQuantity: +newQty }),
-                                  });
-                                  if (res.ok) {
-                                    const updated = await res.json();
+                                  const updated = await apiUpdateProduct(prod.id, { ...prod, availableQuantity: +newQty });
+                                  if (updated && updated.id) {
                                     setMyProducts(prev => prev.map(p => p.id === prod.id ? updated : p));
                                     showToast('✅ Quantity updated!');
+                                  } else {
+                                    throw new Error('fallback');
                                   }
                                 } catch { showToast('✅ Updated (demo mode)'); setMyProducts(prev => prev.map(p => p.id === prod.id ? { ...p, availableQuantity: +newQty } : p)); }
                               }}
@@ -1108,7 +1102,7 @@ export default function Dashboard() {
                               onClick={async () => {
                                 if (!confirm(`Delete "${prod.name}"?`)) return;
                                 try {
-                                  await fetch(`http://localhost:8080/api/products/${prod.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+                                  await apiDeleteProduct(prod.id);
                                 } catch {}
                                 setMyProducts(prev => prev.filter(p => p.id !== prod.id));
                                 setProducts(prev => prev.filter(p => p.id !== prod.id));
