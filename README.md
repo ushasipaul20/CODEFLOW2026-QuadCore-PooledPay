@@ -1,6 +1,7 @@
 # Pooled Pay
 
 Welcome to **Pooled Pay**, an integrated payment and AI Merchant Risk Assessment platform. The system is built using a modern multi-tier architecture to deliver quick, reliable risk predictions and history tracking.
+merchant_risk_project is added within the main file it should be outside the main folder. the deploy link is running without the air anlasyis and the working is shown in the video
 
 ## Architecture Overview
 
