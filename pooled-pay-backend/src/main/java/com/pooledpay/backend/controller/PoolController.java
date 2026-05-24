@@ -68,29 +68,62 @@ public class PoolController {
         String location = user.getLocation() != null ? user.getLocation() : "Unknown";
 
         PoolOrder poolOrder = null;
+        boolean canJoinByPoolId = false;
         if (poolId != null) {
             poolOrder = poolOrderRepository.findById(poolId).orElse(null);
+            if (poolOrder != null && !"CLOSED".equals(poolOrder.getStatus()) && !"DELIVERED".equals(poolOrder.getStatus())) {
+                int maxQty = poolOrder.getMaxQuantity() != null ? poolOrder.getMaxQuantity() : product.getTotalStockQuantity();
+                if (poolOrder.getCurrentQuantity() < maxQty) {
+                    canJoinByPoolId = true;
+                }
+            }
         }
 
-        // If a pool was found by ID and is not CLOSED or DELIVERED, join it
-        if (poolOrder != null && !"CLOSED".equals(poolOrder.getStatus()) && !"DELIVERED".equals(poolOrder.getStatus())) {
+        if (canJoinByPoolId) {
+            int maxQty = poolOrder.getMaxQuantity() != null ? poolOrder.getMaxQuantity() : product.getTotalStockQuantity();
+            int remaining = maxQty - poolOrder.getCurrentQuantity();
+            if (quantity > remaining) {
+                return ResponseEntity.badRequest().body("Order quantity (" + quantity + ") exceeds the remaining available pool quantity of " + remaining + " units.");
+            }
+            int newQty = poolOrder.getCurrentQuantity() + quantity;
+            poolOrder.setCurrentQuantity(newQty);
             poolOrder.setParticipantsCount(poolOrder.getParticipantsCount() + 1);
-            poolOrder.setCurrentQuantity(poolOrder.getCurrentQuantity() + quantity);
+            if (newQty >= maxQty) {
+                poolOrder.setStatus("CLOSED"); // Auto-close since it's full
+            }
         } else {
-            // Otherwise, look for an existing ACTIVE or FULFILLED pool for the same product + location
-            Optional<PoolOrder> existingPool =
+            // Otherwise, look for an existing ACTIVE or FULFILLED pool for the same product + location that is not full
+            Optional<PoolOrder> existingPoolOpt =
                 poolOrderRepository.findFirstByProductIdAndLocationAndStatus(productId, location, "ACTIVE");
             
-            if (!existingPool.isPresent()) {
-                existingPool = poolOrderRepository
+            if (!existingPoolOpt.isPresent()) {
+                existingPoolOpt = poolOrderRepository
                     .findFirstByProductIdAndLocationAndStatus(productId, location, "FULFILLED");
             }
 
-            if (existingPool.isPresent()) {
+            PoolOrder existingPool = null;
+            if (existingPoolOpt.isPresent()) {
+                PoolOrder p = existingPoolOpt.get();
+                int maxQty = p.getMaxQuantity() != null ? p.getMaxQuantity() : product.getTotalStockQuantity();
+                if (p.getCurrentQuantity() < maxQty) {
+                    existingPool = p;
+                }
+            }
+
+            if (existingPool != null) {
                 // Join the matched pool
-                poolOrder = existingPool.get();
+                poolOrder = existingPool;
+                int maxQty = poolOrder.getMaxQuantity() != null ? poolOrder.getMaxQuantity() : product.getTotalStockQuantity();
+                int remaining = maxQty - poolOrder.getCurrentQuantity();
+                if (quantity > remaining) {
+                    return ResponseEntity.badRequest().body("Order quantity (" + quantity + ") exceeds the remaining available pool quantity of " + remaining + " units.");
+                }
+                int newQty = poolOrder.getCurrentQuantity() + quantity;
+                poolOrder.setCurrentQuantity(newQty);
                 poolOrder.setParticipantsCount(poolOrder.getParticipantsCount() + 1);
-                poolOrder.setCurrentQuantity(poolOrder.getCurrentQuantity() + quantity);
+                if (newQty >= maxQty) {
+                    poolOrder.setStatus("CLOSED"); // Auto-close since it's full
+                }
             } else {
                 // Create a brand new pool
                 poolOrder = new PoolOrder();
@@ -99,17 +132,29 @@ public class PoolController {
                 poolOrder.setStatus("ACTIVE");
                 poolOrder.setCategory(product.getCategory());
                 poolOrder.setParticipantsCount(1);
+                int maxQty = product.getTotalStockQuantity() != null ? product.getTotalStockQuantity() : product.getAvailableQuantity();
+                poolOrder.setMaxQuantity(maxQty);
+                if (quantity > maxQty) {
+                    return ResponseEntity.badRequest().body("Order quantity (" + quantity + ") exceeds the wholesaler's total stock of " + maxQty + " units.");
+                }
                 poolOrder.setCurrentQuantity(quantity);
+                if (quantity >= maxQty) {
+                    poolOrder.setStatus("CLOSED"); // Auto-close
+                }
                 poolOrder.setCreatedAt(LocalDateTime.now());
             }
         }
 
-        // Auto-fulfill if min order quantity reached (only transition from ACTIVE)
-        if ("ACTIVE".equals(poolOrder.getStatus()) && poolOrder.getCurrentQuantity() >= product.getMinOrderQuantity()) {
-            poolOrder.setStatus("FULFILLED");
+        // Auto-fulfill if min order quantity reached
+        if (("ACTIVE".equals(poolOrder.getStatus()) || "CLOSED".equals(poolOrder.getStatus())) && poolOrder.getCurrentQuantity() >= product.getMinOrderQuantity()) {
+            if ("ACTIVE".equals(poolOrder.getStatus())) {
+                poolOrder.setStatus("FULFILLED");
+            }
             poolOrder.setSupplierId(product.getSupplierId());
             poolOrder.setSupplierStatus("PENDING");
-            poolOrder.setDeliveryStatus("PREPARING");
+            if (poolOrder.getDeliveryStatus() == null) {
+                poolOrder.setDeliveryStatus("PREPARING");
+            }
         }
 
         // Deduct available stock
@@ -127,6 +172,7 @@ public class PoolController {
             if (body.containsKey("status"))         pool.setStatus(body.get("status"));
             if (body.containsKey("deliveryStatus")) pool.setDeliveryStatus(body.get("deliveryStatus"));
             if (body.containsKey("supplierId"))     pool.setSupplierId(Long.valueOf(body.get("supplierId")));
+            if (body.containsKey("paymentStatus"))  pool.setPaymentStatus(body.get("paymentStatus"));
             return ResponseEntity.ok(poolOrderRepository.save(pool));
         }).orElse(ResponseEntity.notFound().build());
     }

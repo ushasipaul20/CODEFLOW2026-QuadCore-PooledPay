@@ -34,6 +34,8 @@ public class PoolOrder {
 
     private Integer maxQuantity;   // Pool closes when currentQuantity >= maxQuantity
 
+    private String paymentStatus = "PENDING"; // PENDING, PAID
+
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss")
     private LocalDateTime createdAt = LocalDateTime.now();
 }

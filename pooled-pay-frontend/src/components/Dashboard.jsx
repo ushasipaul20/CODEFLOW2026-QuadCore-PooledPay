@@ -65,7 +65,11 @@ const MOCK_PRODUCTS = [
 
 // Pool deadline = 24 hours after creation
 const POOL_LIFETIME_MS = 24 * 60 * 60 * 1000; // 1 day
-function poolDeadline(createdAt) { return new Date(new Date(createdAt).getTime() + POOL_LIFETIME_MS); }
+function poolDeadline(createdAt) {
+  if (!createdAt) return new Date(Date.now() + POOL_LIFETIME_MS);
+  const d = new Date(createdAt);
+  return new Date((isNaN(d.getTime()) ? Date.now() : d.getTime()) + POOL_LIFETIME_MS);
+}
 
 const MOCK_POOLS = [
   { id: 101, productId: 1, status: 'ACTIVE', participantsCount: 7, currentQuantity: 77, maxQuantity: 100, deliveryStatus: null, createdAt: new Date(Date.now()-3600000*2).toISOString(), supplierId: 201, location: 'Mumbai' },
@@ -216,6 +220,12 @@ function CheckoutModal({ product, supplier, mode = 'create', pool = null, token,
   const saved    = original - total;
   const isJoin   = mode === 'join';
 
+  const maxOrderable = isJoin && pool 
+    ? (pool.maxQuantity - pool.currentQuantity) 
+    : (product.totalStockQuantity != null ? product.totalStockQuantity : product.availableQuantity || 1000);
+
+  const isExceeded = qty > maxOrderable;
+
   useEffect(() => { loadRazorpay().then(ok => setRzpReady(ok)); }, []);
 
   const payViaRazorpay = () => {
@@ -309,6 +319,11 @@ function CheckoutModal({ product, supplier, mode = 'create', pool = null, token,
                 <span>Min order: <strong style={{ color: 'var(--warning)' }}>{minQty} {product.unit}</strong></span>
                 <span>Pool price: <strong style={{ color: 'var(--success)' }}>₹{groupP} / unit</strong></span>
               </div>
+              {isExceeded && (
+                <div style={{ color: 'var(--danger)', fontSize: '0.78rem', marginTop: '6px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  ⚠️ Order exceeds the maximum available capacity of {maxOrderable} {product.unit || 'units'}!
+                </div>
+              )}
               <div style={{ marginTop: '6px', fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)', borderRadius: '6px', padding: '6px 10px' }}>
                 ℹ️ You will be counted as <strong style={{ color: '#a78bfa' }}>1 retailer</strong> in this pool regardless of units ordered.
               </div>
@@ -335,15 +350,15 @@ function CheckoutModal({ product, supplier, mode = 'create', pool = null, token,
               <button
                 id="razorpay-pay-btn"
                 onClick={payViaRazorpay}
-                disabled={loading || !rzpReady}
+                disabled={loading || !rzpReady || isExceeded}
                 style={{
                   width: '100%', padding: '14px 18px',
                   border: 'none', borderRadius: 'var(--radius-sm)',
-                  background: loading ? 'rgba(255,255,255,0.05)' : 'linear-gradient(135deg, #072654 0%, #1a66ff 100%)',
-                  color: '#fff', fontWeight: '700', fontSize: '0.95rem',
-                  cursor: loading ? 'not-allowed' : 'pointer',
+                  background: loading || isExceeded ? 'rgba(255,255,255,0.05)' : 'linear-gradient(135deg, #072654 0%, #1a66ff 100%)',
+                  color: loading || isExceeded ? 'var(--text-muted)' : '#fff', fontWeight: '700', fontSize: '0.95rem',
+                  cursor: loading || isExceeded ? 'not-allowed' : 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
-                  boxShadow: loading ? 'none' : '0 4px 18px rgba(26,102,255,0.35)',
+                  boxShadow: loading || isExceeded ? 'none' : '0 4px 18px rgba(26,102,255,0.35)',
                   transition: 'all 0.2s',
                 }}
               >
@@ -359,14 +374,15 @@ function CheckoutModal({ product, supplier, mode = 'create', pool = null, token,
               <button
                 id="bnpl-pay-btn"
                 onClick={payViaBNPL}
-                disabled={loading}
+                disabled={loading || isExceeded}
                 style={{
                   width: '100%', padding: '11px 18px',
-                  border: '1px solid rgba(6,182,212,0.3)', borderRadius: 'var(--radius-sm)',
-                  background: 'rgba(6,182,212,0.06)', color: 'var(--accent)',
+                  border: isExceeded ? '1px solid rgba(255,255,255,0.05)' : '1px solid rgba(6,182,212,0.3)', borderRadius: 'var(--radius-sm)',
+                  background: isExceeded ? 'rgba(255,255,255,0.02)' : 'rgba(6,182,212,0.06)', color: isExceeded ? 'var(--text-muted)' : 'var(--accent)',
                   fontWeight: '600', fontSize: '0.88rem',
-                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                  cursor: loading || isExceeded ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
                   transition: 'all 0.2s',
+                  opacity: isExceeded ? 0.5 : 1,
                 }}
               >
                 🕐 BNPL — Pay ₹{total} within 15 days · Zero interest
@@ -927,27 +943,31 @@ export default function Dashboard() {
         return;
       } else {
         const errText = await response.text();
-        console.warn('API call failed, falling back to local state:', errText);
+        showToast(`❌ Order rejected: ${errText}`, 'danger');
+        return;
       }
     } catch (err) {
       console.warn('Network error, falling back to local simulation:', err);
     }
 
     // ── FALLBACK SIMULATION (For offline or demo JWTs) ─────────────────
-    if (poolId) {
+    const userLocation = localStorage.getItem('userLocation') || 'Mumbai';
+    const activeLocalPool = pools.find(p => p.productId === productId && p.location === userLocation && p.status !== 'CLOSED' && p.status !== 'DELIVERED');
+
+    if (poolId || activeLocalPool) {
+      const targetPoolId = poolId || activeLocalPool.id;
       setPools(prev => prev.map(p => {
-        if (p.id !== poolId) return p;
+        if (p.id !== targetPoolId) return p;
         const newQty = (p.currentQuantity || 0) + qty;
         const max    = p.maxQuantity || prod?.totalStockQuantity || prod?.availableQuantity || Infinity;
         if (newQty >= max) {
-          showToast(`🔒 Pool #${poolId} auto-closed — max quantity reached!`);
+          showToast(`🔒 Pool #${targetPoolId} auto-closed — max quantity reached!`);
           return { ...p, participantsCount: p.participantsCount + 1, currentQuantity: newQty, status: 'CLOSED' };
         }
         return { ...p, participantsCount: p.participantsCount + 1, currentQuantity: newQty };
       }));
       showToast(`🙌 Joined pool (Demo Fallback)! Added ${qty} ${prod?.unit || 'units'} · You are 1 retailer in this pool.`);
     } else {
-      const userLocation = localStorage.getItem('userLocation') || 'Mumbai';
       const maxQty   = prod?.totalStockQuantity || prod?.availableQuantity || 1000;
       const createdAt = new Date().toISOString();
       const newPool = {
@@ -967,20 +987,110 @@ export default function Dashboard() {
     }
   };
 
-  const adminStatusUpdate = (poolId, status) => {
+  const adminStatusUpdate = async (poolId, status) => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`http://localhost:8080/api/pools/${poolId}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ status })
+      });
+      if (res.ok) {
+        const updatedPool = await res.json();
+        setPools(prev => prev.map(p => p.id === poolId ? updatedPool : p));
+        showToast(`⚡ Pool #${poolId} status → ${status}`);
+        return;
+      }
+    } catch (err) {
+      console.warn("Backend update failed, falling back to local state:", err);
+    }
     setPools(prev => prev.map(p => p.id === poolId ? { ...p, status } : p));
-    showToast(`⚡ Pool #${poolId} status → ${status}`);
+    showToast(`⚡ Pool #${poolId} status → ${status} (Demo)`);
   };
 
-  const assignSupplier = (poolId, suppId, suppName) => {
+  const assignSupplier = async (poolId, suppId, suppName) => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`http://localhost:8080/api/pools/${poolId}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          status: 'SUPPLIER_ASSIGNED',
+          deliveryStatus: 'PREPARING',
+          supplierId: String(suppId)
+        })
+      });
+      if (res.ok) {
+        const updatedPool = await res.json();
+        setPools(prev => prev.map(p => p.id === poolId ? updatedPool : p));
+        setAssignPool(null);
+        showToast(`🚚 "${suppName}" assigned to Pool #${poolId}!`);
+        return;
+      }
+    } catch (err) {
+      console.warn("Backend assignSupplier failed, falling back to local state:", err);
+    }
     setPools(prev => prev.map(p => p.id === poolId ? { ...p, status: 'SUPPLIER_ASSIGNED', supplierId: suppId, deliveryStatus: 'PREPARING' } : p));
     setAssignPool(null);
-    showToast(`🚚 "${suppName}" assigned to Pool #${poolId}!`);
+    showToast(`🚚 "${suppName}" assigned to Pool #${poolId}! (Demo)`);
   };
 
-  const supplierStatusUpdate = (poolId, ds) => {
+  const supplierStatusUpdate = async (poolId, ds) => {
+    try {
+      const token = localStorage.getItem('token');
+      const payload = { deliveryStatus: ds };
+      if (ds === 'DELIVERED') {
+        payload.status = 'DELIVERED';
+      }
+      const res = await fetch(`http://localhost:8080/api/pools/${poolId}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const updatedPool = await res.json();
+        setPools(prev => prev.map(p => p.id === poolId ? updatedPool : p));
+        showToast(`📦 Order status updated → ${ds}`);
+        return;
+      }
+    } catch (err) {
+      console.warn("Backend supplierStatusUpdate failed, falling back to local state:", err);
+    }
     setPools(prev => prev.map(p => p.id === poolId ? { ...p, deliveryStatus: ds, status: ds === 'DELIVERED' ? 'DELIVERED' : p.status } : p));
-    showToast(`📦 Order status updated → ${ds}`);
+    showToast(`📦 Order status updated → ${ds} (Demo)`);
+  };
+
+  const adminReleasePayment = async (poolId) => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`http://localhost:8080/api/pools/${poolId}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ paymentStatus: 'PAID' })
+      });
+      if (res.ok) {
+        const updatedPool = await res.json();
+        setPools(prev => prev.map(p => p.id === poolId ? updatedPool : p));
+        showToast(`💳 Payment released to wholesaler for Pool #${poolId}!`);
+        return;
+      }
+    } catch (err) {
+      console.warn("Backend adminReleasePayment failed, falling back to local state:", err);
+    }
+    setPools(prev => prev.map(p => p.id === poolId ? { ...p, paymentStatus: 'PAID' } : p));
+    showToast(`💳 Payment released to wholesaler for Pool #${poolId}! (Demo)`);
   };
 
   // ── Sidebar nav items ──────────────────────────────────────────
@@ -1110,7 +1220,7 @@ export default function Dashboard() {
                       const listedCount = listedProducts.length;
                       const activePoolsCount = pools.filter(pool => {
                         const prod = listedProducts.find(p => p.id === pool.productId);
-                        return prod && pool.status === 'ACTIVE';
+                        return prod && pool.status !== 'CLOSED' && pool.status !== 'DELIVERED';
                       }).length;
 
                       return (
@@ -1468,6 +1578,13 @@ export default function Dashboard() {
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px', fontSize: '0.84rem', color: 'var(--text-muted)', flexWrap: 'wrap', gap: '8px' }}>
                           <span>👥 <strong style={{ color: 'var(--accent)' }}>{pool.participantsCount} retailers</strong> joined</span>
                           <span>💰 Pool Price: <strong style={{ color: 'var(--success)' }}>₹{prod.groupPrice}</strong> <span style={{ color: 'var(--accent)' }}>({savePct(baseP, prod.groupPrice)}% saved)</span></span>
+                          <span>
+                            {pool.paymentStatus === 'PAID' ? (
+                              <span style={{ color: '#34d399', fontWeight: '700' }}>💳 Paid by Admin</span>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)' }}>💳 Payment: Pending</span>
+                            )}
+                          </span>
                         </div>
 
                         {isJoinable && prod.id && prod.name !== 'Unknown' && (
@@ -1502,7 +1619,10 @@ export default function Dashboard() {
               {/* Supplier stats */}
               {(() => {
                 const loggedInSupplierId = Number(localStorage.getItem('userId') || '1');
-                const supplierPools = pools.filter(p => Number(p.supplierId) === loggedInSupplierId);
+                const supplierPools = pools.filter(p => 
+                  Number(p.supplierId) === loggedInSupplierId ||
+                  products.find(prod => prod.id === p.productId && Number(prod.supplierId) === loggedInSupplierId)
+                );
 
                 return (
                   <>
@@ -1538,11 +1658,22 @@ export default function Dashboard() {
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
                                 <div>
                                   <h3 style={{ fontSize: '1.05rem', fontWeight: '700', marginBottom: '4px' }}>Pooled Batch: {prod.name}</h3>
-                                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Pool #{pool.id} · {pool.participantsCount} retailer batches</div>
+                                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                    Pool #{pool.id} · <strong>{pool.participantsCount} orders</strong> placed
+                                  </div>
+                                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                                    📈 Total Ordered Quantity: <strong>{pool.currentQuantity} units</strong>
+                                  </div>
+                                  <div style={{ fontSize: '0.78rem', color: '#fbbf24', marginTop: '2px' }}>
+                                    Remaining Available Pool Quantity: <strong>{pool.maxQuantity - pool.currentQuantity} units</strong>
+                                  </div>
                                 </div>
                                 <div style={{ textAlign: 'right' }}>
                                   <div style={{ fontSize: '1.4rem', fontWeight: '800', color: 'var(--success)' }}>₹{total.toLocaleString()}</div>
                                   <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Total order value</div>
+                                  <div style={{ fontSize: '0.75rem', fontWeight: '700', color: pool.paymentStatus === 'PAID' ? '#34d399' : '#fbbf24', marginTop: '4px' }}>
+                                    {pool.paymentStatus === 'PAID' ? '💳 PAID BY ADMIN' : '💳 AWAITING ADMIN PAYMENT'}
+                                  </div>
                                 </div>
                               </div>
 
@@ -1550,12 +1681,17 @@ export default function Dashboard() {
                                 <div style={{ fontSize: '0.88rem' }}>
                                   Delivery Status: {ds ? <StatusBadge status={ds} /> : <span style={{ color: 'var(--text-muted)' }}>Pending Assignment</span>}
                                 </div>
-                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                                  {!ds && (
+                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                                  {!ds && (pool.status === 'FULFILLED' || pool.status === 'CLOSED' || pool.status === 'SUPPLIER_ASSIGNED') && (
                                     <>
                                       <button onClick={() => supplierStatusUpdate(pool.id, 'PREPARING')} className="btn btn-success btn-sm">✓ Accept Order</button>
                                       <button className="btn btn-danger btn-sm">✗ Reject</button>
                                     </>
+                                  )}
+                                  {!ds && pool.status === 'ACTIVE' && (
+                                    <span style={{ color: '#fbbf24', fontSize: '0.82rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      ⏳ Forming Pool (Awaiting Min Qty)
+                                    </span>
                                   )}
                                   {ds === 'PREPARING' && <button onClick={() => supplierStatusUpdate(pool.id, 'SHIPPED')} className="btn btn-accent btn-sm">📦 Mark as Shipped</button>}
                                   {ds === 'SHIPPED'   && <button onClick={() => supplierStatusUpdate(pool.id, 'DELIVERED')} className="btn btn-success btn-sm">✅ Mark as Delivered</button>}
@@ -1767,7 +1903,7 @@ export default function Dashboard() {
                                 {pool.status === 'ACTIVE' && <CountdownTimer deadline={deadline} compact />}
                               </div>
                             </div>
-                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                               {pool.status === 'ACTIVE' && (
                                 <button onClick={() => adminStatusUpdate(pool.id, 'CLOSED')} className="btn btn-outline btn-sm" style={{ borderColor: 'rgba(124,58,237,0.4)', color: '#a78bfa' }}>
                                   🔒 Close Pool
@@ -1787,6 +1923,21 @@ export default function Dashboard() {
                                 <span style={{ color: 'var(--success)', fontSize: '0.82rem', fontWeight: '700', display:'flex', alignItems:'center', gap:'4px' }}>
                                   {SI(Icon.CheckCircle, 14, 'var(--success)')} FULFILLED
                                 </span>
+                              )}
+
+                              {/* Pay Wholesaler Action */}
+                              {(pool.status === 'SUPPLIER_ASSIGNED' || pool.status === 'FULFILLED' || pool.status === 'DELIVERED') && pool.deliveryStatus && (
+                                <>
+                                  {pool.paymentStatus === 'PAID' ? (
+                                    <span style={{ color: 'var(--success)', fontSize: '0.78rem', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(16,185,129,0.08)', padding: '4px 8px', borderRadius: '4px', border: '1px solid rgba(16,185,129,0.15)' }}>
+                                      💳 Paid (₹{(prod.groupPrice * cur).toLocaleString()})
+                                    </span>
+                                  ) : (
+                                    <button onClick={() => adminReleasePayment(pool.id)} className="btn btn-success btn-sm" style={{ gap: '4px' }}>
+                                      💳 Pay Wholesaler (₹{(prod.groupPrice * cur).toLocaleString()})
+                                    </button>
+                                  )}
+                                </>
                               )}
                             </div>
                           </div>
@@ -1813,17 +1964,24 @@ export default function Dashboard() {
               <div className="glass-panel" style={{ padding: '28px', marginTop: '24px' }}>
                 <h3 style={{ fontSize: '1.05rem', fontWeight: '700', marginBottom: '18px' }}>Registered Suppliers</h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '12px' }}>
-                  {suppliers.map(sup => (
-                    <div key={sup.id} className="animate-fade-in" style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
-                      <div style={{ fontWeight: '700', fontSize: '0.9rem', marginBottom: '6px' }}>{sup.name}</div>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                        <span className={`badge badge-${sup.category==='Pharma'?'primary':'accent'}`}>{sup.category}</span>
-                        <span>⭐ {sup.rating}</span>
-                        <span>📦 {sup.activeOrdersCount} active</span>
-                        <span>🏭 Cap: {sup.capacity}</span>
+                  {suppliers.map(sup => {
+                    const supId = sup.supplierId || sup.id;
+                    const activeCount = pools.filter(pool => {
+                      const prod = products.find(p => p.id === pool.productId);
+                      return prod && Number(prod.supplierId) === Number(supId) && pool.status !== 'CLOSED' && pool.status !== 'DELIVERED';
+                    }).length;
+                    return (
+                      <div key={sup.id} className="animate-fade-in" style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+                        <div style={{ fontWeight: '700', fontSize: '0.9rem', marginBottom: '6px' }}>{sup.name}</div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                          <span className={`badge badge-${sup.category==='Pharma'?'primary':'accent'}`}>{sup.category}</span>
+                          <span>⭐ {sup.rating}</span>
+                          <span>📦 {activeCount} active pools</span>
+                          <span>🏭 Cap: {sup.capacity}</span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>
