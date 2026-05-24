@@ -478,7 +478,7 @@ function AddProductForm({ token, onSuccess }) {
         supplierId: uid ? Number(uid) : 1
       };
       console.log('[AddProduct] Submitting payload:', JSON.stringify(payload));
-      const res = await fetch('http://localhost:8080/api/products/add', {
+      const res = await fetch('http://localhost:8082/api/products/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(payload),
@@ -611,142 +611,238 @@ function AssignModal({ pool, suppliers, onAssign, onClose }) {
 
 // ─── AI COPILOT PANEL ────────────────────────────────────────────
 function AiCopilot() {
-  const [events, setEvents]   = useState(INITIAL_CASHFLOW);
-  const [gstDue, setGstDue]   = useState(12000);
-  const [simAmt, setSimAmt]   = useState('');
-  const [simType, setSimType] = useState('INFLOW');
-  const [simDesc, setSimDesc] = useState('');
-  const [tab, setTab]         = useState('analysis');
+  const [token] = useState(localStorage.getItem('token') || '');
+  const [userId] = useState(localStorage.getItem('userId') || '1');
+  
+  // Predict form state
+  const [formData, setFormData] = useState({
+    rev: 150000, pay_due: 10000, gst: 5000, sales: 4000, rep_score: 80,
+    miss_pay: 0, cash_bal: 50000, up_orders: 15000, ord_freq: 40, credit_used: 20000,
+    upi_vol: 80000, ret_rate: 2, pool_save: 5000, inv_turn: 30, grp_ord: 3,
+    pay_delay: 2, season_idx: 50, supp_rate: 4.2, credit_ratio: 30, cust_growth: 5
+  });
+  
+  const [prediction, setPrediction] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState([]);
+  
+  // Chat state
+  const [messages, setMessages] = useState([
+    { text: "Hello! I am your AI Merchant Risk Assistant. You can run a full risk analysis using the form, or chat with me about your cashflow.", sender: "bot" }
+  ]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
 
-  const inflows   = events.filter(e=>e.type==='INFLOW').reduce((s,e)=>s+e.amount,0);
-  const outflows  = events.filter(e=>e.type==='OUTFLOW').reduce((s,e)=>s+e.amount,0) + gstDue;
-  const net       = inflows - outflows;
-  const ratio     = outflows / Math.max(inflows, 1);
+  useEffect(() => {
+    // Fetch History
+    fetch(`http://localhost:8082/api/ai/history?userId=${userId}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then(res => res.json())
+      .then(data => setHistory(data))
+      .catch(err => console.error("History fetch error:", err));
+  }, [userId, token]);
 
-  const risk = ratio > 1 ? 'HIGH' : ratio > 0.7 ? 'MEDIUM' : 'LOW';
-  const riskColor = { HIGH: '#ef4444', MEDIUM: '#f59e0b', LOW: '#10b981' }[risk];
-  const riskGlow  = { HIGH: 'rgba(239,68,68,0.3)', MEDIUM: 'rgba(245,158,11,0.3)', LOW: 'rgba(16,185,129,0.3)' }[risk];
+  const handleInputChange = (e) => {
+    setFormData({ ...formData, [e.target.name]: Number(e.target.value) });
+  };
 
-  const analysis = {
-    HIGH:   { reason: `Outflows (₹${outflows.toLocaleString()}) exceed inflows by ₹${Math.abs(net).toLocaleString()}. Critical cash crunch imminent.`, suggestion: 'Halt individual purchases. Join Pooled Pay pools immediately to reduce costs by 18–30%.', pred: 'Cash shortage in 5–7 days if corrective action not taken.' },
-    MEDIUM: { reason: `Liabilities are high vs inflows. Safety margin thin at ${Math.round((1-ratio)*100)}%.`, suggestion: 'Switch upcoming procurement to group pools. Use BNPL to defer payment by 15 days.', pred: 'Potential stress in 10–14 days if sales soften.' },
-    LOW:    { reason: `Strong position. Inflows exceed liabilities by ₹${net.toLocaleString()}.`, suggestion: 'Continue pool ordering to maximise savings. Consider pre-paying GST to avoid penalties.', pred: 'Cash flow stable for 30+ days.' },
-  }[risk];
-
-  const addEvent = (e) => {
+  const handlePredict = async (e) => {
     e.preventDefault();
-    if (!simAmt || !simDesc) return;
-    setEvents(prev => [{ type: simType, description: simDesc, amount: +simAmt, date: 'Just simulated' }, ...prev]);
-    setSimAmt(''); setSimDesc('');
+    setLoading(true);
+    try {
+      const payload = { userId: Number(userId), ...formData };
+      const res = await fetch("http://localhost:8082/api/ai/predict-risk", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      setPrediction(data);
+      // Update history
+      setHistory(prev => [data, ...prev]);
+    } catch (error) {
+      console.error("Prediction error:", error);
+    }
+    setLoading(false);
+  };
+
+  const handleChatSubmit = async (e) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+
+    const userMsg = chatInput;
+    setMessages(prev => [...prev, { text: userMsg, sender: "user" }]);
+    setChatInput("");
+    setChatLoading(true);
+
+    try {
+      const res = await fetch("http://localhost:8082/api/ai/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ userId, message: userMsg })
+      });
+      const data = await res.json();
+      setMessages(prev => [...prev, { text: data.reply, sender: "bot" }]);
+    } catch (error) {
+      setMessages(prev => [...prev, { text: "Network error connecting to AI.", sender: "bot" }]);
+    }
+    setChatLoading(false);
+  };
+
+  const getRiskColor = (level) => {
+    if (level === "High Risk") return "#ef4444";
+    if (level === "Medium Risk") return "#f59e0b";
+    return "#10b981";
   };
 
   return (
-    <div className="animate-fade-in">
-      <div style={{ marginBottom: '28px' }}>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: '800', marginBottom: '6px' }}>AI Cashflow Copilot <span style={{ fontSize: '0.8rem', background: 'var(--primary-soft)', color: '#a78bfa', padding: '3px 10px', borderRadius: '20px', verticalAlign: 'middle', fontWeight: '600' }}>BETA</span></h1>
-        <p style={{ color: 'var(--text-muted)' }}>Real-time cashflow intelligence & procurement risk scoring for your pharmacy.</p>
+    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ marginBottom: '24px' }}>
+        <h1 style={{ fontSize: '1.75rem', fontWeight: '800', marginBottom: '6px' }}>
+          AI Copilot <span style={{ fontSize: '0.8rem', background: 'var(--primary-soft)', color: '#a78bfa', padding: '3px 10px', borderRadius: '20px', verticalAlign: 'middle', fontWeight: '600' }}>v2.0 ML Powered</span>
+        </h1>
+        <p style={{ color: 'var(--text-muted)' }}>Advanced Random Forest model analysis for merchant risk, cashflow, and group pooling.</p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: '24px' }}>
-
-        {/* Risk Gauge */}
-        <div className="glass-panel" style={{ padding: '28px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <h3 style={{ fontSize: '1rem', fontWeight: '700', marginBottom: '20px', alignSelf: 'flex-start', display:'flex', alignItems:'center', gap:'8px' }}>
-            {SI(Icon.Shield, 18, riskColor)} Risk Assessment
-          </h3>
-
-          {/* Ring gauge */}
-          <div style={{
-            width: '160px', height: '160px', borderRadius: '50%',
-            border: `10px solid rgba(255,255,255,0.04)`,
-            borderTop: `10px solid ${riskColor}`,
-            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-            boxShadow: `0 0 30px ${riskGlow}, inset 0 0 20px rgba(0,0,0,0.3)`,
-            animation: 'spin-slow 8s linear infinite',
-            margin: '10px 0 20px',
-          }}>
-            <div style={{ animation: 'spin-slow 8s linear infinite reverse', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <span style={{ fontSize: '2rem', fontWeight: '900', color: riskColor }}>{risk}</span>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', letterSpacing: '0.1em' }}>RISK LEVEL</span>
-            </div>
-          </div>
-
-          {/* Key metrics */}
-          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {[
-              { label: 'Total Inflows',  val: `+₹${inflows.toLocaleString()}`,  c: 'var(--success)' },
-              { label: 'Total Outflows', val: `-₹${outflows.toLocaleString()}`, c: 'var(--danger)' },
-              { label: 'Net Position',   val: `${net>=0?'+':''}₹${net.toLocaleString()}`, c: net>=0 ? 'var(--success)' : 'var(--danger)' },
-              { label: 'GST Due',        val: `₹${gstDue.toLocaleString()}`,    c: 'var(--warning)' },
-            ].map(m => (
-              <div key={m.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.84rem' }}>
-                <span style={{ color: 'var(--text-muted)' }}>{m.label}</span>
-                <span style={{ fontWeight: '700', color: m.c, fontFamily: 'JetBrains Mono, monospace' }}>{m.val}</span>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px', flex: 1 }}>
+        {/* LEFT PANEL: Form & History */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          
+          <div className="glass-panel" style={{ padding: '24px' }}>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: '700', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              📊 Merchant Data Input
+            </h3>
+            <form onSubmit={handlePredict}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', maxHeight: '300px', overflowY: 'auto', paddingRight: '10px' }}>
+                {Object.entries(formData).map(([key, val]) => (
+                  <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{key.replace('_', ' ')}</label>
+                    <input type="number" name={key} value={val} onChange={handleInputChange} className="input-field" step="any" required />
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Right column */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-
-          {/* Analysis cards */}
-          {[
-            { title: '🔍 Reasoning', text: analysis.reason,      c: riskColor },
-            { title: '💡 Recommendation', text: analysis.suggestion, c: 'var(--accent)' },
-            { title: '📅 14-day Prediction', text: analysis.pred, c: 'var(--primary)' },
-          ].map(c => (
-            <div key={c.title} className="glass-panel" style={{ padding: '18px 20px', borderLeft: `3px solid ${c.c}` }}>
-              <div style={{ fontWeight: '700', fontSize: '0.88rem', marginBottom: '6px' }}>{c.title}</div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>{c.text}</div>
-            </div>
-          ))}
-
-          {/* GST adjuster */}
-          <div className="glass-panel" style={{ padding: '18px 20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-              <div>
-                <div style={{ fontWeight: '700', fontSize: '0.92rem' }}>Upcoming GST Liability</div>
-                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Due in 5 days · Adjust to simulate</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>₹</span>
-                <input type="number" value={gstDue} onChange={e=>setGstDue(+e.target.value)} className="input-field" style={{ width: '120px', fontFamily: 'JetBrains Mono, monospace', fontWeight: '700' }} />
-              </div>
-            </div>
-          </div>
-
-          {/* Simulate event */}
-          <div className="glass-panel" style={{ padding: '18px 20px' }}>
-            <h4 style={{ fontWeight: '700', fontSize: '0.92rem', marginBottom: '12px' }}>➕ Simulate Cashflow Event</h4>
-            <form onSubmit={addEvent} style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-              <select value={simType} onChange={e=>setSimType(e.target.value)} className="input-field" style={{ flex: '0 0 120px' }}>
-                <option value="INFLOW">+ Inflow</option>
-                <option value="OUTFLOW">− Outflow</option>
-              </select>
-              <input type="text" placeholder="Description" value={simDesc} onChange={e=>setSimDesc(e.target.value)} className="input-field" style={{ flex: 1, minWidth: '140px' }} required />
-              <input type="number" placeholder="Amount ₹" value={simAmt} onChange={e=>setSimAmt(e.target.value)} className="input-field" style={{ flex: '0 0 120px' }} required />
-              <button type="submit" className="btn btn-accent">Add Event</button>
+              <button type="submit" className="btn btn-accent btn-full" style={{ marginTop: '16px' }} disabled={loading}>
+                {loading ? '🧠 Running ML Analysis...' : 'Generate Risk Prediction'}
+              </button>
             </form>
           </div>
 
-          {/* Ledger */}
-          <div className="glass-panel" style={{ padding: '18px 20px', flex: 1 }}>
-            <h4 style={{ fontWeight: '700', fontSize: '0.92rem', marginBottom: '12px' }}>📒 Cashflow Ledger</h4>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px', overflowY: 'auto', paddingRight: '4px' }}>
-              {events.map((e, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'rgba(255,255,255,0.015)', border: '1px solid var(--border)', borderRadius: '6px', fontSize: '0.84rem' }}>
-                  <div>
-                    <div style={{ fontWeight: '600' }}>{e.description}</div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{e.date}</div>
+          <div className="glass-panel" style={{ padding: '24px', flex: 1 }}>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: '700', marginBottom: '16px' }}>🕒 Prediction History</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '200px', overflowY: 'auto' }}>
+              {history.length === 0 ? (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No past predictions found.</div>
+              ) : (
+                history.map((h, i) => (
+                  <div key={i} style={{ padding: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontWeight: '600', fontSize: '0.9rem', color: getRiskColor(h.riskLevel || h.risk_level) }}>
+                        {h.riskLevel || h.risk_level} (Score: {h.riskScore || h.risk_score})
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        Confidence: {((h.confidence || 0) * 100).toFixed(0)}%
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {new Date(h.createdAt || Date.now()).toLocaleDateString()}
+                    </div>
                   </div>
-                  <span style={{ fontWeight: '800', color: e.type==='INFLOW' ? 'var(--success)' : 'var(--danger)', fontFamily: 'JetBrains Mono, monospace' }}>
-                    {e.type==='INFLOW' ? '+' : '−'}₹{e.amount.toLocaleString()}
-                  </span>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
+        </div>
+
+        {/* RIGHT PANEL: Chatbot & Live Results */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          
+          {prediction && (
+            <div className="glass-panel animate-fade-in-scale" style={{ padding: '28px', borderTop: `4px solid ${getRiskColor(prediction.risk_level)}`, background: 'linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(0,0,0,0) 100%)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+                <div>
+                  <h2 style={{ fontSize: '1.5rem', fontWeight: '800', margin: 0, color: getRiskColor(prediction.risk_level) }}>
+                    {prediction.risk_level}
+                  </h2>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    Confidence Level: <strong style={{ color: 'var(--text-main)' }}>{((prediction.confidence || 0) * 100).toFixed(1)}%</strong>
+                  </div>
+                </div>
+                <div style={{ width: '60px', height: '60px', borderRadius: '50%', border: `4px solid ${getRiskColor(prediction.risk_level)}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem', fontWeight: '800', color: getRiskColor(prediction.risk_level), boxShadow: `0 0 20px ${getRiskColor(prediction.risk_level)}40` }}>
+                  {prediction.risk_score}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '12px 16px', borderRadius: '8px', borderLeft: '3px solid var(--warning)' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px', fontWeight: '700' }}>Reasoning</div>
+                  <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '0.85rem', lineHeight: 1.5 }}>
+                    {(prediction.reasons || prediction.reasonsList || []).map((r, i) => <li key={i}>{r}</li>)}
+                    {typeof prediction.reasons === 'string' && prediction.reasons.split('|').map((r, i) => <li key={i}>{r.trim()}</li>)}
+                  </ul>
+                </div>
+                <div style={{ background: 'rgba(6,182,212,0.05)', padding: '12px 16px', borderRadius: '8px', borderLeft: '3px solid var(--accent)' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '4px', fontWeight: '700' }}>Recommendations</div>
+                  <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '0.85rem', lineHeight: 1.5 }}>
+                    {(prediction.suggestions || prediction.suggestionsList || []).map((s, i) => <li key={i}>{s}</li>)}
+                    {typeof prediction.suggestions === 'string' && prediction.suggestions.split('|').map((s, i) => <li key={i}>{s.trim()}</li>)}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}>
+            <div style={{ padding: '16px', borderBottom: '1px solid var(--border)', background: 'rgba(0,0,0,0.2)' }}>
+              <h3 style={{ fontSize: '1rem', fontWeight: '700', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                🤖 AI Assistant
+              </h3>
+            </div>
+            
+            <div style={{ flex: 1, padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {messages.map((m, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: m.sender === 'user' ? 'flex-end' : 'flex-start' }}>
+                  <div style={{
+                    maxWidth: '80%', padding: '12px 16px', borderRadius: '12px', fontSize: '0.9rem', lineHeight: 1.5,
+                    background: m.sender === 'user' ? 'var(--accent)' : 'rgba(255,255,255,0.05)',
+                    color: m.sender === 'user' ? '#fff' : 'var(--text-main)',
+                    borderBottomRightRadius: m.sender === 'user' ? '4px' : '12px',
+                    borderBottomLeftRadius: m.sender === 'bot' ? '4px' : '12px',
+                  }}>
+                    {m.text}
+                  </div>
+                </div>
+              ))}
+              {chatLoading && (
+                <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                  <div style={{ background: 'rgba(255,255,255,0.05)', padding: '12px 16px', borderRadius: '12px', borderBottomLeftRadius: '4px', display: 'flex', gap: '4px' }}>
+                    <div className="dot-flashing"></div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ padding: '16px', borderTop: '1px solid var(--border)', background: 'rgba(0,0,0,0.2)' }}>
+              <form onSubmit={handleChatSubmit} style={{ display: 'flex', gap: '10px' }}>
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Ask about your risk score or request pooling suggestions..."
+                  className="input-field"
+                  style={{ flex: 1 }}
+                />
+                <button type="submit" className="btn btn-primary" disabled={chatLoading}>Send</button>
+              </form>
+            </div>
+          </div>
+
         </div>
       </div>
     </div>
@@ -830,9 +926,9 @@ export default function Dashboard() {
       const storedRole = localStorage.getItem('userRole') || user.role;
 
       const [pRes, poolRes, sRes] = await Promise.all([
-        fetch('http://localhost:8080/api/products', { signal: AbortSignal.timeout(3000) }),
-        fetch('http://localhost:8080/api/pools', { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(3000) }),
-        fetch('http://localhost:8080/api/supplier/list', { signal: AbortSignal.timeout(3000) }),
+        fetch('http://localhost:8082/api/products', { signal: AbortSignal.timeout(3000) }),
+        fetch('http://localhost:8082/api/pools', { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(3000) }),
+        fetch('http://localhost:8082/api/supplier/list', { signal: AbortSignal.timeout(3000) }),
       ]);
       if (pRes.ok) {
         const prodData = await pRes.json();
@@ -854,7 +950,7 @@ export default function Dashboard() {
       }
       // Fetch supplier's own products
       if (storedRole === 'SUPPLIER') {
-        const myRes = await fetch(`http://localhost:8080/api/products/supplier/${uid}`, { signal: AbortSignal.timeout(3000) });
+        const myRes = await fetch(`http://localhost:8082/api/products/supplier/${uid}`, { signal: AbortSignal.timeout(3000) });
         if (myRes.ok) setMyProducts(await myRes.json());
       }
     } catch { /* demo fallback */ }
@@ -908,7 +1004,7 @@ export default function Dashboard() {
     const userId = localStorage.getItem('userId') || '1';
 
     try {
-      const response = await fetch('http://localhost:8080/api/pools/order', {
+      const response = await fetch('http://localhost:8082/api/pools/order', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -993,7 +1089,7 @@ export default function Dashboard() {
   const adminStatusUpdate = async (poolId, status) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`http://localhost:8080/api/pools/${poolId}/status`, {
+      const res = await fetch(`http://localhost:8082/api/pools/${poolId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1017,7 +1113,7 @@ export default function Dashboard() {
   const assignSupplier = async (poolId, suppId, suppName) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`http://localhost:8080/api/pools/${poolId}/status`, {
+      const res = await fetch(`http://localhost:8082/api/pools/${poolId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1051,7 +1147,7 @@ export default function Dashboard() {
       if (ds === 'DELIVERED') {
         payload.status = 'DELIVERED';
       }
-      const res = await fetch(`http://localhost:8080/api/pools/${poolId}/status`, {
+      const res = await fetch(`http://localhost:8082/api/pools/${poolId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1075,7 +1171,7 @@ export default function Dashboard() {
   const wholesalerAcceptPool = async (poolId) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`http://localhost:8080/api/pools/${poolId}/status`, {
+      const res = await fetch(`http://localhost:8082/api/pools/${poolId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1099,7 +1195,7 @@ export default function Dashboard() {
   const adminApprovePool = async (poolId) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`http://localhost:8080/api/pools/${poolId}/status`, {
+      const res = await fetch(`http://localhost:8082/api/pools/${poolId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1123,7 +1219,7 @@ export default function Dashboard() {
   const adminReleasePayment = async (poolId) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`http://localhost:8080/api/pools/${poolId}/status`, {
+      const res = await fetch(`http://localhost:8082/api/pools/${poolId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1847,7 +1943,7 @@ export default function Dashboard() {
                                 const newQty = prompt(`Update available quantity for "${prod.name}" (current: ${prod.availableQuantity}):`);
                                 if (newQty === null || isNaN(+newQty)) return;
                                 try {
-                                  const res = await fetch(`http://localhost:8080/api/products/${prod.id}`, {
+                                  const res = await fetch(`http://localhost:8082/api/products/${prod.id}`, {
                                     method: 'PUT',
                                     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                                     body: JSON.stringify({ ...prod, availableQuantity: +newQty }),
@@ -1868,7 +1964,7 @@ export default function Dashboard() {
                               onClick={async () => {
                                 if (!confirm(`Delete "${prod.name}"?`)) return;
                                 try {
-                                  await fetch(`http://localhost:8080/api/products/${prod.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+                                  await fetch(`http://localhost:8082/api/products/${prod.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
                                 } catch {}
                                 setMyProducts(prev => prev.filter(p => p.id !== prod.id));
                                 setProducts(prev => prev.filter(p => p.id !== prod.id));
