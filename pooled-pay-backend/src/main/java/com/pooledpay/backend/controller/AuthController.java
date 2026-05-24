@@ -2,7 +2,9 @@ package com.pooledpay.backend.controller;
 
 import com.pooledpay.backend.model.Role;
 import com.pooledpay.backend.model.User;
+import com.pooledpay.backend.model.SupplierProfile;
 import com.pooledpay.backend.repository.UserRepository;
+import com.pooledpay.backend.repository.SupplierProfileRepository;
 import com.pooledpay.backend.security.JwtUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -19,6 +21,9 @@ public class AuthController {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private SupplierProfileRepository supplierProfileRepository;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -43,7 +48,20 @@ public class AuthController {
             user.setRole(Role.RETAILER);
         }
         
-        userRepository.save(user);
+        User savedUser = userRepository.save(user);
+
+        if (savedUser.getRole() == Role.SUPPLIER) {
+            SupplierProfile profile = new SupplierProfile();
+            profile.setSupplierId(savedUser.getId());
+            profile.setName(savedUser.getUsername());
+            profile.setCategory("Pharma"); // Default category
+            profile.setRating(5.0); // Start with a 5.0 rating
+            profile.setCapacity(50); // Default capacity
+            profile.setMaxConcurrentOrders(50);
+            profile.setActiveOrdersCount(0);
+            supplierProfileRepository.save(profile);
+        }
+
         return ResponseEntity.ok("User registered successfully");
     }
 

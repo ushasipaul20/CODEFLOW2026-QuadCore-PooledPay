@@ -37,11 +37,12 @@ export default function Auth({ type }) {
   const isLogin = type === 'login';
 
   // Persist session info clearly
-  const saveSession = (token, userRole, userName, userId) => {
+  const saveSession = (token, userRole, userName, userId, userLocation) => {
     localStorage.setItem('token', token);
     localStorage.setItem('userRole', userRole);
     localStorage.setItem('username', userName);
     localStorage.setItem('userId', userId || '1');
+    localStorage.setItem('userLocation', userLocation || 'Mumbai');
   };
 
   const handleSubmit = async (e) => {
@@ -68,7 +69,7 @@ export default function Auth({ type }) {
       if (res.ok) {
         if (isLogin) {
           const data = await res.json();
-          saveSession(data.token, data.role, data.username, data.userId);
+          saveSession(data.token, data.role, data.username, data.userId, data.location || 'Mumbai');
           navigate('/dashboard');
         } else {
           // After signup, auto-login immediately
@@ -80,7 +81,7 @@ export default function Auth({ type }) {
           });
           if (loginRes.ok) {
             const data = await loginRes.json();
-            saveSession(data.token, data.role, data.username, data.userId);
+            saveSession(data.token, data.role, data.username, data.userId, location || 'Mumbai');
             navigate('/dashboard');
           } else {
             setSuccess('✅ Account created! Please sign in.');
@@ -98,17 +99,17 @@ export default function Auth({ type }) {
         if (isLogin) {
           const acc = DEMO_ACCOUNTS[username.toLowerCase()];
           if (acc && acc.password === password) {
-            saveSession(makeMockJwt(username, acc.role), acc.role, username, '1');
+            saveSession(makeMockJwt(username, acc.role), acc.role, username, '1', 'Mumbai');
             navigate('/dashboard');
           } else {
             // Any user → use RETAILER as demo fallback
-            saveSession(makeMockJwt(username || 'Demo', 'RETAILER'), 'RETAILER', username || 'Demo', '1');
+            saveSession(makeMockJwt(username || 'Demo', 'RETAILER'), 'RETAILER', username || 'Demo', '1', 'Mumbai');
             navigate('/dashboard');
           }
         } else {
           setSuccess('✅ Account saved (demo mode)! Logging you in...');
           setTimeout(() => {
-            saveSession(makeMockJwt(username, role), role, username, '1');
+            saveSession(makeMockJwt(username, role), role, username, '1', location || 'Mumbai');
             navigate('/dashboard');
           }, 1200);
         }
@@ -122,7 +123,7 @@ export default function Auth({ type }) {
 
   const quickLogin = (demoRole) => {
     const name = demoRole.charAt(0) + demoRole.slice(1).toLowerCase();
-    saveSession(makeMockJwt(name, demoRole), demoRole, name, '1');
+    saveSession(makeMockJwt(name, demoRole), demoRole, name, '1', 'Mumbai');
     navigate('/dashboard');
   };
 

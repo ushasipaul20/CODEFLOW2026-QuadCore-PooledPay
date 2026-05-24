@@ -41,20 +41,36 @@ function decodeJwt(token) {
   } catch { return null; }
 }
 
+// ─── RAZORPAY LOADER ─────────────────────────────────────────────
+function loadRazorpay() {
+  return new Promise((resolve) => {
+    if (window.Razorpay) { resolve(true); return; }
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.onload  = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
+
 // ─── MOCK DATA ───────────────────────────────────────────────────
 const MOCK_PRODUCTS = [
-  { id: 1, name: 'Paracetamol 500mg (Pack of 100)', category: 'Pharma', originalPrice: 240, groupPrice: 168, stock: 5000 },
-  { id: 2, name: 'Dettol Antiseptic Liquid 500ml', category: 'FMCG', originalPrice: 185, groupPrice: 130, stock: 2000 },
-  { id: 3, name: 'Azithromycin 250mg (Pack of 10)', category: 'Pharma', originalPrice: 320, groupPrice: 210, stock: 1500 },
-  { id: 4, name: 'ORS Electrolyte Sachets (Box/20)', category: 'Pharma', originalPrice: 140, groupPrice: 95, stock: 8000 },
-  { id: 5, name: 'Lifebuoy Soap Bar (12 pack)', category: 'FMCG', originalPrice: 280, groupPrice: 195, stock: 3000 },
-  { id: 6, name: 'Cetirizine 10mg (Strip of 10)', category: 'Pharma', originalPrice: 55, groupPrice: 38, stock: 6000 },
+  { id: 1, name: 'Paracetamol 500mg (Pack of 100)', category: 'Pharma', basePrice: 240, originalPrice: 240, groupPrice: 168, stock: 5000, availableQuantity: 5000, minOrderQuantity: 10, unit: 'packs', deliveryTimeEstimate: '2-3', supplierId: 201 },
+  { id: 2, name: 'Dettol Antiseptic Liquid 500ml', category: 'FMCG', basePrice: 185, originalPrice: 185, groupPrice: 130, stock: 2000, availableQuantity: 2000, minOrderQuantity: 5, unit: 'bottles', deliveryTimeEstimate: '3-4', supplierId: 203 },
+  { id: 3, name: 'Azithromycin 250mg (Pack of 10)', category: 'Pharma', basePrice: 320, originalPrice: 320, groupPrice: 210, stock: 1500, availableQuantity: 1500, minOrderQuantity: 10, unit: 'packs', deliveryTimeEstimate: '2-3', supplierId: 202 },
+  { id: 4, name: 'ORS Electrolyte Sachets (Box/20)', category: 'Pharma', basePrice: 140, originalPrice: 140, groupPrice: 95, stock: 8000, availableQuantity: 8000, minOrderQuantity: 20, unit: 'boxes', deliveryTimeEstimate: '1-2', supplierId: 204 },
+  { id: 5, name: 'Lifebuoy Soap Bar (12 pack)', category: 'FMCG', basePrice: 280, originalPrice: 280, groupPrice: 195, stock: 3000, availableQuantity: 3000, minOrderQuantity: 8, unit: 'packs', deliveryTimeEstimate: '4-5', supplierId: 203 },
+  { id: 6, name: 'Cetirizine 10mg (Strip of 10)', category: 'Pharma', basePrice: 55, originalPrice: 55, groupPrice: 38, stock: 6000, availableQuantity: 6000, minOrderQuantity: 50, unit: 'strips', deliveryTimeEstimate: '2', supplierId: 201 },
 ];
 
+// Pool deadline = 24 hours after creation
+const POOL_LIFETIME_MS = 24 * 60 * 60 * 1000; // 1 day
+function poolDeadline(createdAt) { return new Date(new Date(createdAt).getTime() + POOL_LIFETIME_MS); }
+
 const MOCK_POOLS = [
-  { id: 101, productId: 1, status: 'ACTIVE', participantsCount: 7, deliveryStatus: null, createdAt: new Date(Date.now()-3600000*2).toISOString(), supplierId: null },
-  { id: 102, productId: 3, status: 'SUPPLIER_ASSIGNED', participantsCount: 12, deliveryStatus: 'PREPARING', createdAt: new Date(Date.now()-3600000*18).toISOString(), supplierId: 201 },
-  { id: 103, productId: 5, status: 'DELIVERED', participantsCount: 9, deliveryStatus: 'DELIVERED', createdAt: new Date(Date.now()-3600000*48).toISOString(), supplierId: 203 },
+  { id: 101, productId: 1, status: 'ACTIVE', participantsCount: 7, currentQuantity: 77, maxQuantity: 100, deliveryStatus: null, createdAt: new Date(Date.now()-3600000*2).toISOString(), supplierId: 201, location: 'Mumbai' },
+  { id: 102, productId: 3, status: 'SUPPLIER_ASSIGNED', participantsCount: 12, currentQuantity: 120, maxQuantity: 150, deliveryStatus: 'PREPARING', createdAt: new Date(Date.now()-3600000*18).toISOString(), supplierId: 202, location: 'Mumbai' },
+  { id: 103, productId: 5, status: 'DELIVERED', participantsCount: 9, currentQuantity: 90, maxQuantity: 90, deliveryStatus: 'DELIVERED', createdAt: new Date(Date.now()-3600000*48).toISOString(), supplierId: 203, location: 'Delhi' },
 ];
 
 const MOCK_SUPPLIERS = [
@@ -92,6 +108,52 @@ function StatusBadge({ status }) {
 }
 
 function savePct(orig, grp) { return Math.round((1 - grp / orig) * 100); }
+
+// ─── COUNTDOWN TIMER COMPONENT ──────────────────────────────────
+function CountdownTimer({ deadline, compact = false }) {
+  const [remaining, setRemaining] = useState(() => Math.max(0, new Date(deadline) - Date.now()));
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const r = Math.max(0, new Date(deadline) - Date.now());
+      setRemaining(r);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [deadline]);
+
+  if (remaining <= 0) return <span style={{ color: 'var(--danger)', fontWeight: '700', fontSize: compact ? '0.72rem' : '0.82rem' }}>⏰ Expired</span>;
+
+  const hours   = Math.floor(remaining / 3600000);
+  const minutes = Math.floor((remaining % 3600000) / 60000);
+  const seconds = Math.floor((remaining % 60000) / 1000);
+  const pct     = Math.max(0, remaining / POOL_LIFETIME_MS);
+  const urgent  = remaining < 3 * 3600000; // last 3 hours
+  const clr     = urgent ? 'var(--danger)' : remaining < 8 * 3600000 ? 'var(--warning)' : 'var(--accent)';
+
+  if (compact) {
+    return (
+      <span style={{ color: clr, fontWeight: '700', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+        {urgent ? '🔥' : '⏱'} {hours}h {minutes}m {seconds}s
+      </span>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          {urgent ? '🔥 Closing soon' : '⏱ Closes in'}
+        </span>
+        <span style={{ fontSize: '0.88rem', fontWeight: '800', color: clr, fontFamily: 'JetBrains Mono, monospace' }}>
+          {String(hours).padStart(2,'0')}:{String(minutes).padStart(2,'0')}:{String(seconds).padStart(2,'0')}
+        </span>
+      </div>
+      <div style={{ height: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct * 100}%`, background: `linear-gradient(to right, ${clr}, ${clr}88)`, borderRadius: '2px', transition: 'width 1s linear' }} />
+      </div>
+    </div>
+  );
+}
 
 // ─── LIVE TICKER ─────────────────────────────────────────────────
 function LiveTicker() {
@@ -139,32 +201,60 @@ function OrderStepper({ pool }) {
   );
 }
 
-// ─── CHECKOUT MODAL ──────────────────────────────────────────────
-function CheckoutModal({ product, token, onClose, onSuccess }) {
-  const [qty, setQty]             = useState(5);
-  const [method, setMethod]       = useState('UPI');
-  const [result, setResult]       = useState(null);
-  const [loading, setLoading]     = useState(false);
+// ─── CHECKOUT MODAL (Razorpay + Unit Selection) ──────────────────
+function CheckoutModal({ product, supplier, mode = 'create', pool = null, token, onClose, onSuccess }) {
+  const minQty = product.minOrderQuantity || 1;
+  const [qty, setQty]           = useState(minQty);
+  const [result, setResult]     = useState(null);
+  const [loading, setLoading]   = useState(false);
+  const [rzpReady, setRzpReady] = useState(false);
 
-  const total    = product.groupPrice * qty;
-  const original = product.originalPrice * qty;
+  const baseP   = product.basePrice || product.originalPrice || 0;
+  const groupP  = product.groupPrice || 0;
+  const total   = groupP * qty;
+  const original = baseP * qty;
   const saved    = original - total;
+  const isJoin   = mode === 'join';
 
-  const execute = async (succeed) => {
-    if (!succeed) { setResult({ ok: false }); return; }
+  useEffect(() => { loadRazorpay().then(ok => setRzpReady(ok)); }, []);
+
+  const payViaRazorpay = () => {
+    if (!rzpReady || !window.Razorpay) {
+      alert('Razorpay SDK could not load. Check your internet connection.');
+      return;
+    }
     setLoading(true);
-    try {
-      const res = await fetch('http://localhost:8080/api/pools/order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ userId: localStorage.getItem('userId') || 1, productId: product.id, quantity: qty }),
-        signal: AbortSignal.timeout(3000),
-      });
-      if (!res.ok) throw new Error();
-    } catch { /* demo mode — proceed anyway */ }
-    setLoading(false);
-    setResult({ ok: true, total, saved, pct: savePct(product.originalPrice, product.groupPrice) });
-    onSuccess({ productId: product.id, outflow: total });
+    const options = {
+      key: 'rzp_test_S8rRrLNJ4qpXGT',  // ⚠️ Replace with your Razorpay Test Key ID
+      amount: total * 100,
+      currency: 'INR',
+      name: 'PooledPay',
+      description: `${isJoin ? 'Join Pool' : 'Create Pool'}: ${product.name} × ${qty} ${product.unit || 'units'}`,
+      handler(response) {
+        setLoading(false);
+        setResult({ ok: true, total, saved, pct: savePct(baseP, groupP), qty, paymentId: response.razorpay_payment_id });
+        onSuccess({ productId: product.id, outflow: total, qty, poolId: pool?.id ?? null });
+      },
+      prefill: {
+        name: localStorage.getItem('username') || 'Retailer',
+        email: 'retailer@pooledpay.in',
+        contact: '9000000000',
+      },
+      notes: { product: product.name, qty, mode },
+      theme: { color: '#7c3aed' },
+      modal: { ondismiss: () => setLoading(false) },
+    };
+    const rzp = new window.Razorpay(options);
+    rzp.on('payment.failed', (resp) => {
+      setLoading(false);
+      setResult({ ok: false, error: resp.error?.description || 'Payment declined' });
+    });
+    rzp.open();
+  };
+
+  const payViaBNPL = () => {
+    setResult({ ok: true, total, saved, pct: savePct(baseP, groupP), qty, method: 'BNPL' });
+    onSuccess({ productId: product.id, outflow: total, qty, poolId: pool?.id ?? null });
   };
 
   return (
@@ -172,90 +262,119 @@ function CheckoutModal({ product, token, onClose, onSuccess }) {
       <div className="glass-intense animate-fade-in-scale" style={{ width: '100%', maxWidth: '500px', padding: '36px 32px' }}>
 
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
           <div>
-            <h3 style={{ fontSize: '1.15rem', fontWeight: '700', marginBottom: '4px' }}>Checkout Simulator</h3>
-            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{product.name}</p>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: isJoin ? 'rgba(6,182,212,0.1)' : 'rgba(124,58,237,0.1)', border: `1px solid ${isJoin ? 'rgba(6,182,212,0.3)' : 'rgba(124,58,237,0.3)'}`, borderRadius: '20px', padding: '3px 10px', fontSize: '0.72rem', fontWeight: '700', color: isJoin ? 'var(--accent)' : '#a78bfa', marginBottom: '8px' }}>
+              {isJoin ? '🙌 Joining Pool' : '🚀 Creating New Pool'}
+            </div>
+            <h3 style={{ fontSize: '1.05rem', fontWeight: '700', marginBottom: '4px' }}>{product.name}</h3>
+            {supplier && (
+              <p style={{ fontSize: '0.78rem', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                🚚 <strong>{supplier.name}</strong> · ⭐ {supplier.rating}
+              </p>
+            )}
           </div>
           <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)', color: 'var(--text-muted)', width: '32px', height: '32px', borderRadius: '8px', cursor: 'pointer', fontSize: '1rem', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
         </div>
 
         {!result ? (
           <>
-            {/* Qty + price */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
-              <div>
-                <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '6px' }}>Quantity</label>
-                <input type="number" min={1} value={qty} onChange={e=>setQty(Math.max(1,+e.target.value))} className="input-field" />
+            {/* Pool context for join mode */}
+            {isJoin && pool && (
+              <div style={{ background: 'rgba(6,182,212,0.06)', border: '1px solid rgba(6,182,212,0.2)', borderRadius: 'var(--radius-sm)', padding: '12px 14px', marginBottom: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--accent)', fontWeight: '600', fontSize: '0.82rem', marginBottom: '3px' }}>
+                  <span>Pool #{pool.id} · {pool.location || 'Your area'}</span>
+                  <span>👥 {pool.participantsCount} retailers in</span>
+                </div>
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                  {pool.currentQuantity || 0} / {pool.maxQuantity || '?'} units pooled so far
+                </div>
               </div>
-              <div>
-                <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '6px' }}>Group Price / Unit</label>
-                <div style={{ fontSize: '1.3rem', fontWeight: '800', color: 'var(--success)', paddingTop: '10px' }}>₹{product.groupPrice}</div>
+            )}
+
+            {/* Unit input */}
+            <div style={{ marginBottom: '18px' }}>
+              <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '6px' }}>
+                How many units do you want to order?
+              </label>
+              <input
+                type="number"
+                min={minQty}
+                value={qty}
+                onChange={e => setQty(Math.max(minQty, +e.target.value || minQty))}
+                className="input-field"
+                style={{ fontSize: '1.1rem', fontWeight: '700' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '5px' }}>
+                <span>Min order: <strong style={{ color: 'var(--warning)' }}>{minQty} {product.unit}</strong></span>
+                <span>Pool price: <strong style={{ color: 'var(--success)' }}>₹{groupP} / unit</strong></span>
+              </div>
+              <div style={{ marginTop: '6px', fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)', borderRadius: '6px', padding: '6px 10px' }}>
+                ℹ️ You will be counted as <strong style={{ color: '#a78bfa' }}>1 retailer</strong> in this pool regardless of units ordered.
               </div>
             </div>
 
             {/* Bill summary */}
             <div style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '16px', marginBottom: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
-                <span>MRP (individual)</span>
+                <span>MRP × {qty} units</span>
                 <span style={{ textDecoration: 'line-through', color: 'var(--danger)' }}>₹{original}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.95rem', fontWeight: '600', marginBottom: '8px' }}>
-                <span>Pooled Price</span>
+                <span>Pool Price × {qty}</span>
                 <span style={{ color: 'var(--success)' }}>₹{total}</span>
               </div>
               <div style={{ borderTop: '1px dashed rgba(255,255,255,0.06)', paddingTop: '8px', display: 'flex', justifyContent: 'space-between', fontSize: '0.88rem', fontWeight: '700', color: 'var(--accent)' }}>
                 <span>🎉 Your Savings</span>
-                <span>₹{saved} ({savePct(product.originalPrice, product.groupPrice)}% OFF)</span>
+                <span>₹{saved} ({savePct(baseP, groupP)}% OFF)</span>
               </div>
             </div>
 
-            {/* Payment method */}
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '10px' }}>Payment Mode</label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                {[
-                  { key: 'UPI',  icon: '⚡', label: 'Instant UPI',  sub: 'Scan & pay now' },
-                  { key: 'BNPL', icon: '🕐', label: 'BNPL Credit', sub: 'Pay in 15 days' },
-                ].map(m => (
-                  <button key={m.key} onClick={() => setMethod(m.key)}
-                    style={{
-                      padding: '14px', border: `1px solid ${method===m.key ? 'rgba(6,182,212,0.5)' : 'var(--border)'}`,
-                      borderRadius: 'var(--radius-sm)', background: method===m.key ? 'rgba(6,182,212,0.08)' : 'rgba(0,0,0,0.2)',
-                      cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s',
-                      boxShadow: method===m.key ? '0 0 0 2px rgba(6,182,212,0.15)' : 'none',
-                    }}>
-                    <div style={{ fontSize: '1.3rem', marginBottom: '4px' }}>{m.icon}</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: '700', color: method===m.key ? 'var(--accent)' : 'var(--text-main)' }}>{m.label}</div>
-                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>{m.sub}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* UPI QR */}
-            {method === 'UPI' && (
-              <div style={{ display: 'flex', gap: '16px', alignItems: 'center', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '14px', marginBottom: '20px' }}>
-                <div style={{ background: '#fff', padding: '8px', borderRadius: '8px', flexShrink: 0 }}>
-                  <div style={{ width: '72px', height: '72px', background: 'repeating-conic-gradient(#000 0% 25%, #fff 0% 50%) 50% / 12px 12px', borderRadius: '3px' }} />
-                </div>
-                <div>
-                  <div style={{ fontWeight: '700', fontSize: '0.9rem', marginBottom: '4px' }}>pooledpay@yesbank</div>
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>Scan with PhonePe, GPay, Paytm or any UPI app. ₹{total} split collected from all pool participants.</div>
-                </div>
-              </div>
-            )}
-            {method === 'BNPL' && (
-              <div style={{ background: 'rgba(6,182,212,0.06)', border: '1px solid rgba(6,182,212,0.2)', borderRadius: 'var(--radius-sm)', padding: '14px', marginBottom: '20px', fontSize: '0.85rem', color: 'var(--accent)' }}>
-                🕐 <strong>BNPL Enabled</strong> — Pay ₹{total} within 15 days of delivery. Powered by Pooled Pay Credit Engine. Zero interest for on-time payment.
-              </div>
-            )}
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '10px' }}>
-              <button onClick={() => execute(true)} disabled={loading} className="btn btn-accent btn-full">
-                {loading ? '⏳ Processing…' : `✓ Simulate Success  ₹${total}`}
+            {/* Payment buttons */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <button
+                id="razorpay-pay-btn"
+                onClick={payViaRazorpay}
+                disabled={loading || !rzpReady}
+                style={{
+                  width: '100%', padding: '14px 18px',
+                  border: 'none', borderRadius: 'var(--radius-sm)',
+                  background: loading ? 'rgba(255,255,255,0.05)' : 'linear-gradient(135deg, #072654 0%, #1a66ff 100%)',
+                  color: '#fff', fontWeight: '700', fontSize: '0.95rem',
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
+                  boxShadow: loading ? 'none' : '0 4px 18px rgba(26,102,255,0.35)',
+                  transition: 'all 0.2s',
+                }}
+              >
+                {loading ? '⏳ Opening Razorpay…' : (
+                  <>
+                    <span style={{ fontSize: '1.15rem' }}>💳</span>
+                    Pay ₹{total} via Razorpay
+                    {!rzpReady && <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>(loading…)</span>}
+                  </>
+                )}
               </button>
-              <button onClick={() => execute(false)} className="btn btn-danger" style={{ padding: '10px 16px' }}>✗ Fail</button>
+
+              <button
+                id="bnpl-pay-btn"
+                onClick={payViaBNPL}
+                disabled={loading}
+                style={{
+                  width: '100%', padding: '11px 18px',
+                  border: '1px solid rgba(6,182,212,0.3)', borderRadius: 'var(--radius-sm)',
+                  background: 'rgba(6,182,212,0.06)', color: 'var(--accent)',
+                  fontWeight: '600', fontSize: '0.88rem',
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                  transition: 'all 0.2s',
+                }}
+              >
+                🕐 BNPL — Pay ₹{total} within 15 days · Zero interest
+              </button>
+
+              <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.5, margin: 0 }}>
+                🔒 Payments secured by Razorpay. 256-bit SSL encryption.
+              </p>
             </div>
           </>
         ) : (
@@ -263,18 +382,35 @@ function CheckoutModal({ product, token, onClose, onSuccess }) {
             {result.ok ? (
               <>
                 <div style={{ fontSize: '4rem', marginBottom: '16px', animation: 'float 2s ease-in-out infinite' }}>🎉</div>
-                <h3 style={{ color: 'var(--success)', fontSize: '1.3rem', fontWeight: '800', marginBottom: '8px' }}>Payment Successful!</h3>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '20px', lineHeight: 1.6 }}>
-                  Pool order confirmed. You paid <strong style={{ color: 'var(--text-main)' }}>₹{result.total}</strong> and saved <strong style={{ color: 'var(--success)' }}>₹{result.saved}</strong> ({result.pct}%) through Pooled Pay group buying.
-                </p>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '24px' }}>
-                  <div style={{ background: 'var(--success-soft)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 'var(--radius-sm)', padding: '14px' }}>
-                    <div style={{ fontSize: '1.4rem', fontWeight: '800', color: 'var(--success)' }}>₹{result.saved}</div>
-                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Saved vs MRP</div>
+                <h3 style={{ color: 'var(--success)', fontSize: '1.3rem', fontWeight: '800', marginBottom: '8px' }}>
+                  {isJoin ? 'You Joined the Pool!' : 'Pool Created!'}
+                </h3>
+                {result.paymentId && (
+                  <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '10px', fontFamily: 'JetBrains Mono, monospace', wordBreak: 'break-all' }}>
+                    Txn: {result.paymentId}
+                  </p>
+                )}
+                {result.method === 'BNPL' && (
+                  <div style={{ background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.2)', borderRadius: '8px', padding: '8px 14px', fontSize: '0.8rem', color: 'var(--accent)', marginBottom: '12px' }}>
+                    🕐 BNPL activated — ₹{result.total} due within 15 days of delivery.
                   </div>
-                  <div style={{ background: 'var(--accent-soft)', border: '1px solid rgba(6,182,212,0.2)', borderRadius: 'var(--radius-sm)', padding: '14px' }}>
-                    <div style={{ fontSize: '1.4rem', fontWeight: '800', color: 'var(--accent)' }}>{result.pct}%</div>
-                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Discount</div>
+                )}
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', marginBottom: '20px', lineHeight: 1.6 }}>
+                  You ordered <strong style={{ color: 'var(--text-main)' }}>{result.qty} {product.unit}</strong> and paid <strong style={{ color: 'var(--text-main)' }}>₹{result.total}</strong>.
+                  Saved <strong style={{ color: 'var(--success)' }}>₹{result.saved}</strong> ({result.pct}%) vs MRP.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '24px' }}>
+                  <div style={{ background: 'var(--success-soft)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 'var(--radius-sm)', padding: '12px' }}>
+                    <div style={{ fontSize: '1.2rem', fontWeight: '800', color: 'var(--success)' }}>₹{result.saved}</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Saved</div>
+                  </div>
+                  <div style={{ background: 'var(--accent-soft)', border: '1px solid rgba(6,182,212,0.2)', borderRadius: 'var(--radius-sm)', padding: '12px' }}>
+                    <div style={{ fontSize: '1.2rem', fontWeight: '800', color: 'var(--accent)' }}>{result.qty}</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Units ordered</div>
+                  </div>
+                  <div style={{ background: 'var(--primary-soft)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: 'var(--radius-sm)', padding: '12px' }}>
+                    <div style={{ fontSize: '1.2rem', fontWeight: '800', color: '#a78bfa' }}>{result.pct}%</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Discount</div>
                   </div>
                 </div>
               </>
@@ -282,7 +418,7 @@ function CheckoutModal({ product, token, onClose, onSuccess }) {
               <>
                 <div style={{ fontSize: '4rem', marginBottom: '16px' }}>❌</div>
                 <h3 style={{ color: 'var(--danger)', fontSize: '1.3rem', fontWeight: '800', marginBottom: '8px' }}>Payment Failed</h3>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '24px' }}>UPI transaction was rejected. Please retry or switch to BNPL credit.</p>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '24px' }}>{result.error || 'Transaction was declined. Please retry.'}</p>
               </>
             )}
             <button onClick={onClose} className="btn btn-outline btn-full">Close</button>
@@ -610,13 +746,42 @@ export default function Dashboard() {
   const [products, setProducts]     = useState(MOCK_PRODUCTS);
   const [myProducts, setMyProducts] = useState([]);   // Supplier's own products
   const [pools, setPools]           = useState(MOCK_POOLS);
-  const [suppliers]                 = useState(MOCK_SUPPLIERS);
+  const [suppliers, setSuppliers]   = useState(MOCK_SUPPLIERS);
+  const [selectedSupplierId, setSelectedSupplierId] = useState(null);
   const [loading, setLoading]       = useState(false);
   const [toast, setToast]           = useState('');
   const [editingProduct, setEditingProduct] = useState(null); // product being edited
 
   const [checkout, setCheckout]     = useState(null);   // { product }
   const [assignPool, setAssignPool] = useState(null);   // pool obj
+
+  // Reset selected supplier drill-down when tab changes
+  useEffect(() => {
+    setSelectedSupplierId(null);
+  }, [activeTab]);
+
+  const getMergedSuppliers = () => {
+    const list = [...suppliers];
+    const productSupplierIds = [...new Set(products.map(p => p.supplierId).filter(Boolean))];
+    
+    productSupplierIds.forEach(supId => {
+      const exists = list.some(s => Number(s.id) === Number(supId) || Number(s.supplierId) === Number(supId));
+      if (!exists) {
+        const isSelf = user.role === 'SUPPLIER' && Number(localStorage.getItem('userId')) === Number(supId);
+        list.push({
+          id: supId,
+          supplierId: supId,
+          name: isSelf ? (user.username || `Supplier #${supId}`) : `Supplier #${supId}`,
+          category: 'Pharma',
+          rating: 5.0,
+          capacity: 50,
+          activeOrdersCount: 0,
+          isVirtual: true
+        });
+      }
+    });
+    return list;
+  };
 
   // ── Auth guard ─────────────────────────────────────────────────
   useEffect(() => {
@@ -638,15 +803,17 @@ export default function Dashboard() {
   }, [token]);
 
   // ── Data fetch (with mock fallback) ────────────────────────────
-  const fetchData = useCallback(async () => {
-    setLoading(true);
+  const fetchData = useCallback(async (isSilent = false) => {
+    const silent = isSilent === true;
+    if (!silent) setLoading(true);
     try {
       const uid = localStorage.getItem('userId') || '1';
       const storedRole = localStorage.getItem('userRole') || user.role;
 
-      const [pRes, poolRes] = await Promise.all([
+      const [pRes, poolRes, sRes] = await Promise.all([
         fetch('http://localhost:8080/api/products', { signal: AbortSignal.timeout(3000) }),
         fetch('http://localhost:8080/api/pools', { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(3000) }),
+        fetch('http://localhost:8080/api/supplier/list', { signal: AbortSignal.timeout(3000) }),
       ]);
       if (pRes.ok) {
         const prodData = await pRes.json();
@@ -656,16 +823,33 @@ export default function Dashboard() {
         const poolData = await poolRes.json();
         if (poolData.length > 0) setPools(poolData);
       }
+      if (sRes.ok) {
+        const supData = await sRes.json();
+        if (supData.length > 0) {
+          const normalized = supData.map(s => ({
+            ...s,
+            id: s.supplierId || s.id
+          }));
+          setSuppliers(normalized);
+        }
+      }
       // Fetch supplier's own products
       if (storedRole === 'SUPPLIER') {
         const myRes = await fetch(`http://localhost:8080/api/products/supplier/${uid}`, { signal: AbortSignal.timeout(3000) });
         if (myRes.ok) setMyProducts(await myRes.json());
       }
     } catch { /* demo fallback */ }
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, [token, user.role]);
 
-  useEffect(() => { if (token) fetchData(); }, [token]);
+  useEffect(() => {
+    if (!token) return;
+    fetchData(false); // Initial load
+    const interval = setInterval(() => {
+      fetchData(true); // Silent update in background
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [token, fetchData]);
 
   // ── Toast ──────────────────────────────────────────────────────
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 4000); };
@@ -679,19 +863,108 @@ export default function Dashboard() {
     setToken(''); navigate('/login');
   };
 
-  const handleCheckoutSuccess = ({ productId, outflow }) => {
-    const prod = products.find(p => p.id === productId);
-    const newPool = { id: Date.now(), productId, status: 'ACTIVE', participantsCount: 1, deliveryStatus: null, createdAt: new Date().toISOString(), supplierId: null };
-    setPools(prev => [newPool, ...prev]);
-    showToast(`✅ Pool created for ${prod?.name}! Outflow of ₹${outflow} recorded.`);
-  };
+  // ── Auto-close pools when deadline or maxQty reached ─────────
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setPools(prev => prev.map(pool => {
+        if (pool.status !== 'ACTIVE') return pool;
+        const prod = products.find(p => p.id === pool.productId);
+        const max  = pool.maxQuantity || prod?.totalStockQuantity || prod?.availableQuantity || Infinity;
+        const deadlineReached = Date.now() >= poolDeadline(pool.createdAt).getTime();
+        const maxReached      = (pool.currentQuantity || 0) >= max;
+        if (deadlineReached || maxReached) {
+          const reason = maxReached ? 'max quantity reached' : '1-day deadline';
+          showToast(`🔒 Pool #${pool.id} auto-closed (${reason})`);
+          return { ...pool, status: 'CLOSED' };
+        }
+        return pool;
+      }));
+    }, 5000); // check every 5 seconds
+    return () => clearInterval(interval);
+  }, [products]);
 
-  const handleJoinPool = async (poolId, productName) => {
+  // Unified handler: called after Razorpay/BNPL success for both create-pool and join-pool
+  const handleCheckoutSuccess = async ({ productId, outflow, qty = 1, poolId }) => {
+    const prod = products.find(p => p.id === productId);
+    const userId = localStorage.getItem('userId') || '1';
+
     try {
-      await fetch(`http://localhost:8080/api/pools/join/${poolId}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(2000) });
-    } catch { /* demo */ }
-    setPools(prev => prev.map(p => p.id === poolId ? { ...p, participantsCount: p.participantsCount + 1 } : p));
-    showToast(`🙌 Successfully joined pool for ${productName}!`);
+      const response = await fetch('http://localhost:8080/api/pools/order', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          userId: Number(userId),
+          productId: Number(productId),
+          quantity: Number(qty),
+          ...(poolId ? { poolId: Number(poolId) } : {})
+        })
+      });
+
+      if (response.ok) {
+        const savedPool = await response.json();
+        
+        // Update local pools state with the saved/returned Pool from database
+        setPools(prev => {
+          const exists = prev.some(p => p.id === savedPool.id);
+          if (exists) {
+            return prev.map(p => p.id === savedPool.id ? savedPool : p);
+          } else {
+            return [savedPool, ...prev];
+          }
+        });
+        
+        // Trigger a silent refresh of other lists (e.g. products' available stock)
+        fetchData(true);
+
+        if (poolId) {
+          showToast(`🙌 Joined pool! Added ${qty} ${prod?.unit || 'units'} · You are 1 retailer in this pool.`);
+        } else {
+          showToast(`✅ Pool created with ${qty} ${prod?.unit || 'units'}! Closes in 24h or when ${savedPool.maxQuantity || 1000} total units are pooled.`);
+        }
+        return;
+      } else {
+        const errText = await response.text();
+        console.warn('API call failed, falling back to local state:', errText);
+      }
+    } catch (err) {
+      console.warn('Network error, falling back to local simulation:', err);
+    }
+
+    // ── FALLBACK SIMULATION (For offline or demo JWTs) ─────────────────
+    if (poolId) {
+      setPools(prev => prev.map(p => {
+        if (p.id !== poolId) return p;
+        const newQty = (p.currentQuantity || 0) + qty;
+        const max    = p.maxQuantity || prod?.totalStockQuantity || prod?.availableQuantity || Infinity;
+        if (newQty >= max) {
+          showToast(`🔒 Pool #${poolId} auto-closed — max quantity reached!`);
+          return { ...p, participantsCount: p.participantsCount + 1, currentQuantity: newQty, status: 'CLOSED' };
+        }
+        return { ...p, participantsCount: p.participantsCount + 1, currentQuantity: newQty };
+      }));
+      showToast(`🙌 Joined pool (Demo Fallback)! Added ${qty} ${prod?.unit || 'units'} · You are 1 retailer in this pool.`);
+    } else {
+      const userLocation = localStorage.getItem('userLocation') || 'Mumbai';
+      const maxQty   = prod?.totalStockQuantity || prod?.availableQuantity || 1000;
+      const createdAt = new Date().toISOString();
+      const newPool = {
+        id: Date.now(),
+        productId,
+        status: 'ACTIVE',
+        participantsCount: 1,
+        currentQuantity: qty,
+        maxQuantity: maxQty,
+        deliveryStatus: null,
+        createdAt,
+        supplierId: prod?.supplierId || null,
+        location: userLocation,
+      };
+      setPools(prev => [newPool, ...prev]);
+      showToast(`✅ Pool created (Demo Fallback) with ${qty} ${prod?.unit || 'units'}!`);
+    }
   };
 
   const adminStatusUpdate = (poolId, status) => {
@@ -713,7 +986,7 @@ export default function Dashboard() {
   // ── Sidebar nav items ──────────────────────────────────────────
   const navItems = {
     RETAILER: [
-      { id: 'marketplace', icon: Icon.ShoppingBag, label: 'Browse Products' },
+      { id: 'marketplace', icon: Icon.ShoppingBag, label: 'Browse Suppliers' },
       { id: 'pools',       icon: Icon.Layers,      label: 'My Active Pools' },
       { id: 'ai',          icon: Icon.Cpu,         label: 'AI Copilot' },
     ],
@@ -807,88 +1080,277 @@ export default function Dashboard() {
           {user.role === 'RETAILER' && activeTab === 'marketplace' && (
             <div className="animate-fade-in">
               <div style={{ marginBottom: '32px' }}>
-                <h1 style={{ fontSize: '1.75rem', fontWeight: '800', marginBottom: '6px' }}>Retailer Sourcing Portal</h1>
-                <p style={{ color: 'var(--text-muted)' }}>Browse wholesale batches. Join live pools to unlock group pricing up to 30% off MRP.</p>
+                <h1 style={{ fontSize: '1.75rem', fontWeight: '800', marginBottom: '6px' }}>
+                  {selectedSupplierId ? 'Supplier Catalog' : 'Browse Wholesale Suppliers'}
+                </h1>
+                <p style={{ color: 'var(--text-muted)' }}>
+                  {selectedSupplierId 
+                    ? 'Browse wholesale batches listed by this supplier. Join or start a procurement pool.' 
+                    : 'Select a verified supplier to view their product catalog and create or join group pools.'}
+                </p>
               </div>
 
               {loading ? (
                 <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}>
                   <Icon.Refresh width={28} height={28} style={{ color: 'var(--accent)', animation: 'spin 1s linear infinite' }} />
                 </div>
-              ) : products.length === 0 ? (
-                <div className="glass-panel" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                  <div style={{ fontSize: '3rem', marginBottom: '16px' }}>🛒</div>
-                  <div style={{ fontWeight: '600', marginBottom: '6px' }}>No products listed yet</div>
-                  <div style={{ fontSize: '0.85rem' }}>Suppliers haven’t added any products. Check back soon!</div>
-                </div>
-              ) : (
-                <div className="stagger" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
-                  {products.map(prod => {
-                    const baseP = prod.basePrice || prod.originalPrice || 0;
-                    const groupP = prod.groupPrice || 0;
-                    const sp = savePct(baseP, groupP);
-                    const saved = baseP - groupP;
-                    const activePool = pools.find(p => p.productId === prod.id && p.status === 'ACTIVE');
+              ) : selectedSupplierId === null ? (
+                /* Level 1: Supplier Directory */
+                getMergedSuppliers().length === 0 ? (
+                  <div className="glass-panel" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                    <div style={{ fontSize: '3rem', marginBottom: '16px' }}>🚚</div>
+                    <div style={{ fontWeight: '600', marginBottom: '6px' }}>No suppliers registered yet</div>
+                    <div style={{ fontSize: '0.85rem' }}>Check back soon for wholesale distributors.</div>
+                  </div>
+                ) : (
+                  <div className="stagger" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '24px' }}>
+                    {getMergedSuppliers().map(sup => {
+                      const supId = sup.supplierId || sup.id;
+                      const listedProducts = products.filter(p => Number(p.supplierId) === Number(supId));
+                      const listedCount = listedProducts.length;
+                      const activePoolsCount = pools.filter(pool => {
+                        const prod = listedProducts.find(p => p.id === pool.productId);
+                        return prod && pool.status === 'ACTIVE';
+                      }).length;
 
-                    return (
-                      <div key={prod.id} className="glass-panel animate-fade-in" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                        {/* Top row */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <span className={`badge badge-${prod.category==='Pharma'?'primary':prod.category==='FMCG'?'accent':'success'}`}>{prod.category}</span>
-                          {activePool && <span className="badge badge-success">{SI(Icon.Users, 11)} {activePool.participantsCount} in pool</span>}
-                        </div>
+                      return (
+                        <div key={supId} className="glass-panel animate-fade-in" style={{ 
+                          padding: '24px', 
+                          display: 'flex', 
+                          flexDirection: 'column', 
+                          gap: '16px',
+                          position: 'relative',
+                          overflow: 'hidden',
+                          transition: 'transform 0.2s, box-shadow 0.2s',
+                          cursor: 'pointer'
+                        }}
+                        onClick={() => setSelectedSupplierId(supId)}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.transform = 'translateY(-4px)';
+                          e.currentTarget.style.boxShadow = '0 12px 30px rgba(6, 182, 212, 0.15)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0)';
+                          e.currentTarget.style.boxShadow = 'none';
+                        }}
+                        >
+                          {/* Decorative corner glow */}
+                          <div style={{ 
+                            position: 'absolute', 
+                            top: '-50px', 
+                            right: '-50px', 
+                            width: '100px', 
+                            height: '100px', 
+                            borderRadius: '50%', 
+                            background: sup.category === 'Pharma' ? 'radial-gradient(circle, rgba(124,58,237,0.15) 0%, transparent 70%)' : 'radial-gradient(circle, rgba(6,182,212,0.12) 0%, transparent 70%)',
+                            pointerEvents: 'none'
+                          }} />
 
-                        <div>
-                          <h3 style={{ fontSize: '0.97rem', fontWeight: '700', color: 'var(--text-main)', lineHeight: 1.4, marginBottom: '4px' }}>{prod.name}</h3>
-                          {prod.description && <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>{prod.description}</p>}
-                        </div>
-
-                        {/* Stock & delivery info */}
-                        <div style={{ display: 'flex', gap: '12px', fontSize: '0.76rem', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-                          {prod.availableQuantity != null && <span>📦 {prod.availableQuantity} {prod.unit || 'units'} available</span>}
-                          {prod.minOrderQuantity != null && <span>📋 Min: {prod.minOrderQuantity} {prod.unit || 'units'}</span>}
-                          {prod.deliveryTimeEstimate && <span>🕐 {prod.deliveryTimeEstimate} days</span>}
-                        </div>
-
-                        {/* Savings widget */}
-                        <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '14px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', marginBottom: '8px' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Individual MRP</span>
-                            <span style={{ textDecoration: 'line-through', color: 'var(--danger)' }}>₹{baseP}</span>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                            <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Pool Price</span>
-                            <span style={{ fontSize: '1.25rem', fontWeight: '800', color: 'var(--success)' }}>₹{groupP}</span>
-                          </div>
-                          <div style={{ height: '5px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', marginBottom: '8px', overflow: 'hidden' }}>
-                            <div style={{ height: '100%', width: `${sp}%`, background: 'linear-gradient(to right, var(--success), #34d399)', borderRadius: '3px' }} />
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', fontWeight: '700', color: 'var(--accent)' }}>
-                            <span>You save</span>
-                            <span>₹{saved} ({sp}% OFF)</span>
-                          </div>
-                        </div>
-
-                        {/* CTA */}
-                        {activePool ? (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <button onClick={() => setCheckout({ product: prod })} className="btn btn-accent btn-full">
-                              {SI(Icon.Users, 15)} Join Active Pool ({activePool.participantsCount} already in)
-                            </button>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.74rem', color: 'var(--text-muted)', padding: '0 2px' }}>
-                              <span>📍 {activePool.location || 'Your area'}</span>
-                              <span>Auto-closes at min. quantity</span>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <span className={`badge badge-${sup.category === 'Pharma' ? 'primary' : sup.category === 'FMCG' ? 'accent' : 'success'}`}>
+                              {sup.category}
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.85rem', color: '#fbbf24', fontWeight: '700' }}>
+                              {SI(Icon.Star, 14, '#fbbf24')} {sup.rating}
                             </div>
                           </div>
-                        ) : (
-                          <button onClick={() => setCheckout({ product: prod })} className="btn btn-primary btn-full">
-                            {SI(Icon.PlusCircle, 15)} Start Pool Order
-                          </button>
-                        )}
+
+                          <div>
+                            <h3 style={{ fontSize: '1.15rem', fontWeight: '700', color: 'var(--text-main)', marginBottom: '6px' }}>{sup.name}</h3>
+                            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Verified wholesale supplier for hospital & retail pharmacy networks.</p>
+                          </div>
+
+                          {/* Stats Grid */}
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', background: 'rgba(0,0,0,0.15)', padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+                            <div>
+                              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Products Listed</div>
+                              <div style={{ fontSize: '1.05rem', fontWeight: '800', color: 'var(--text-main)', marginTop: '2px' }}>{listedCount} items</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Active Pools</div>
+                              <div style={{ fontSize: '1.05rem', fontWeight: '800', color: 'var(--accent)', marginTop: '2px' }}>{activePoolsCount} pools</div>
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            <span>🏭 Capacity: {sup.capacity} batches/wk</span>
+                            <span style={{ color: 'var(--accent)', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              Browse Catalog →
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
+              ) : (
+                /* Level 2: Supplier Catalog View */
+                (() => {
+                  const selectedSupplier = getMergedSuppliers().find(s => Number(s.id) === Number(selectedSupplierId) || Number(s.supplierId) === Number(selectedSupplierId));
+                  const supplierProducts = products.filter(p => Number(p.supplierId) === Number(selectedSupplierId));
+
+                  return (
+                    <div>
+                      {/* Breadcrumbs & back btn */}
+                      <button onClick={() => setSelectedSupplierId(null)} className="btn btn-outline" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '20px', padding: '8px 16px' }}>
+                        ← Back to Suppliers
+                      </button>
+
+                      {/* Supplier header banner */}
+                      <div className="glass-panel" style={{ padding: '24px', marginBottom: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', borderLeft: '4px solid var(--accent)' }}>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                            <h2 style={{ fontSize: '1.4rem', fontWeight: '800', margin: 0 }}>{selectedSupplier?.name}</h2>
+                            <span className={`badge badge-${selectedSupplier?.category === 'Pharma' ? 'primary' : 'accent'}`}>{selectedSupplier?.category}</span>
+                          </div>
+                          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
+                            Direct procurement from {selectedSupplier?.name}. Form a pool or join existing active pools.
+                          </p>
+                        </div>
+                        <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Rating</div>
+                            <div style={{ fontSize: '1.2rem', fontWeight: '800', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              ⭐ {selectedSupplier?.rating}
+                            </div>
+                          </div>
+                          <div style={{ width: '1px', height: '30px', background: 'var(--border)' }} />
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Capacity</div>
+                            <div style={{ fontSize: '1.2rem', fontWeight: '800', color: 'var(--text-main)' }}>{selectedSupplier?.capacity} batches</div>
+                          </div>
+                        </div>
                       </div>
-                    );
-                  })}
-                </div>
+
+                      {supplierProducts.length === 0 ? (
+                        <div className="glass-panel" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                          <div style={{ fontSize: '3rem', marginBottom: '16px' }}>📦</div>
+                          <div style={{ fontWeight: '600', marginBottom: '6px' }}>No products listed by this supplier</div>
+                          <div style={{ fontSize: '0.85rem' }}>This supplier has not listed any wholesale products yet.</div>
+                        </div>
+                      ) : (
+                        <div className="stagger" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
+                          {supplierProducts.map(prod => {
+                            const baseP = prod.basePrice || prod.originalPrice || 0;
+                            const groupP = prod.groupPrice || 0;
+                            const sp = savePct(baseP, groupP);
+                            const saved = baseP - groupP;
+                            const activePool = pools.find(p => p.productId === prod.id && p.status !== 'CLOSED' && p.status !== 'DELIVERED');
+
+                            return (
+                              <div key={prod.id} className="glass-panel animate-fade-in" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                {/* Top row */}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                  <span className={`badge badge-${prod.category==='Pharma'?'primary':prod.category==='FMCG'?'accent':'success'}`}>{prod.category}</span>
+                                  {activePool && <span className="badge badge-success">{SI(Icon.Users, 11)} {activePool.participantsCount} in pool</span>}
+                                </div>
+
+                                <div>
+                                  <h3 style={{ fontSize: '0.97rem', fontWeight: '700', color: 'var(--text-main)', lineHeight: 1.4, marginBottom: '4px' }}>{prod.name}</h3>
+                                  {prod.description && <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>{prod.description}</p>}
+                                </div>
+
+                                {/* Stock, min qty & deadline info */}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0' }}>
+                                  {prod.availableQuantity != null && (
+                                    <span>📦 <strong>Max Pool Quantity (Total Stock):</strong> {prod.availableQuantity} {prod.unit}</span>
+                                  )}
+                                  {prod.minOrderQuantity != null && (
+                                    <span>📋 <strong>Min Quantity to Close Pool:</strong> {prod.minOrderQuantity} {prod.unit}</span>
+                                  )}
+                                  {activePool && (() => {
+                                    const cur = activePool.currentQuantity || 0;
+                                    const min = prod.minOrderQuantity || 1;
+                                    const max = activePool.maxQuantity || prod.availableQuantity || min;
+                                    const pct = Math.min(100, Math.round((cur / max) * 100));
+                                    const minPct = Math.min(100, Math.round((min / max) * 100));
+                                    return (
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                          <span style={{ color: 'var(--accent)', fontWeight: '600' }}>📈 Pool Progress: {cur} / {max} units</span>
+                                          <span style={{ fontWeight: '700', color: cur >= min ? 'var(--success)' : 'var(--warning)' }}>{pct}%</span>
+                                        </div>
+                                        <div style={{ height: '8px', background: 'rgba(255,255,255,0.06)', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                          {/* Min threshold marker */}
+                                          <div style={{ position: 'absolute', left: `${minPct}%`, top: 0, bottom: 0, width: '2px', background: 'rgba(251,191,36,0.6)', zIndex: 1 }} />
+                                          <div style={{ height: '100%', width: `${pct}%`, background: cur >= min ? 'linear-gradient(to right, var(--success), #34d399)' : 'linear-gradient(to right, var(--accent), #22d3ee)', borderRadius: '4px', transition: 'width 0.6s ease' }} />
+                                        </div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                                          <span>0</span>
+                                          <span style={{ color: '#fbbf24' }}>Min: {min}</span>
+                                          <span>Max: {max}</span>
+                                        </div>
+                                        <div style={{
+                                          fontSize: '0.72rem',
+                                          fontWeight: '600',
+                                          color: cur >= min ? '#34d399' : '#fbbf24',
+                                          marginTop: '2px',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '4px'
+                                        }}>
+                                          {cur >= min ? (
+                                            <span>✅ Min quantity met (Fulfillment threshold reached)</span>
+                                          ) : (
+                                            <span>⚠️ Needs <strong>{min - cur}</strong> more units to fulfill min quantity</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
+                                  {activePool && (
+                                    <div style={{ marginTop: '4px', padding: '8px 10px', background: 'rgba(6,182,212,0.06)', border: '1px solid rgba(6,182,212,0.15)', borderRadius: 'var(--radius-sm)' }}>
+                                      <CountdownTimer deadline={poolDeadline(activePool.createdAt)} />
+                                    </div>
+                                  )}
+                                  {prod.deliveryTimeEstimate && <span>🕐 <strong>Delivery Estimate:</strong> {prod.deliveryTimeEstimate} days</span>}
+                                </div>
+
+                                {/* Savings widget */}
+                                <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '14px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', marginBottom: '8px' }}>
+                                    <span style={{ color: 'var(--text-muted)' }}>Individual MRP</span>
+                                    <span style={{ textDecoration: 'line-through', color: 'var(--danger)' }}>₹{baseP}</span>
+                                  </div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                    <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Pool Price</span>
+                                    <span style={{ fontSize: '1.25rem', fontWeight: '800', color: 'var(--success)' }}>₹{groupP}</span>
+                                  </div>
+                                  <div style={{ height: '5px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', marginBottom: '8px', overflow: 'hidden' }}>
+                                    <div style={{ height: '100%', width: `${sp}%`, background: 'linear-gradient(to right, var(--success), #34d399)', borderRadius: '3px' }} />
+                                  </div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', fontWeight: '700', color: 'var(--accent)' }}>
+                                    <span>You save</span>
+                                    <span>₹{saved} ({sp}% OFF)</span>
+                                  </div>
+                                </div>
+
+                                {/* CTA */}
+                                {activePool ? (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    <button onClick={() => setCheckout({ product: prod, mode: 'join', pool: activePool })} className="btn btn-accent btn-full">
+                                      {SI(Icon.Users, 15)} Join Active Pool ({activePool.participantsCount} already in)
+                                    </button>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.74rem', color: 'var(--text-muted)', padding: '0 2px' }}>
+                                      <span>📍 {activePool.location || 'Your area'}</span>
+                                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <CountdownTimer deadline={poolDeadline(activePool.createdAt)} compact />
+                                      </span>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <button onClick={() => setCheckout({ product: prod, mode: 'create', pool: null })} className="btn btn-primary btn-full">
+                                    {SI(Icon.PlusCircle, 15)} Start Pool (closes in 24h or at max qty)
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()
               )}
             </div>
           )}
@@ -915,29 +1377,109 @@ export default function Dashboard() {
               ) : (
                 <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   {pools.map(pool => {
-                    const prod = products.find(p => p.id === pool.productId) || { name: 'Unknown', basePrice: 0, groupPrice: 0 };
-                    const baseP = prod.basePrice || prod.originalPrice || 0;
+                    const prod     = products.find(p => p.id === pool.productId) || { name: 'Unknown', basePrice: 0, groupPrice: 0, supplierId: null };
+                    const baseP    = prod.basePrice || prod.originalPrice || 0;
+                    const supplier = getMergedSuppliers().find(s => Number(s.id) === Number(prod.supplierId) || Number(s.supplierId) === Number(prod.supplierId) || Number(s.id) === Number(pool.supplierId) || Number(s.supplierId) === Number(pool.supplierId));
+                    const cur      = pool.currentQuantity || 0;
+                    const minQty   = prod.minOrderQuantity || 1;
+                    const maxQty   = pool.maxQuantity || prod.totalStockQuantity || prod.availableQuantity || minQty;
+                    const progPct  = Math.min(100, Math.round((cur / maxQty) * 100));
+                    const minPct   = Math.min(100, Math.round((minQty / maxQty) * 100));
+                    const deadline = poolDeadline(pool.createdAt);
+                    const isActive = pool.status === 'ACTIVE';
+                    const isFulfilled = pool.status === 'FULFILLED' || pool.status === 'SUPPLIER_ASSIGNED';
+                    const isJoinable = isActive || isFulfilled;
+
                     return (
                       <div key={pool.id} className="glass-panel animate-fade-in" style={{ padding: '24px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
                           <div>
-                            <h3 style={{ fontSize: '1.05rem', fontWeight: '700', marginBottom: '4px' }}>{prod.name}</h3>
+                            <h3 style={{ fontSize: '1.05rem', fontWeight: '700', marginBottom: '2px' }}>{prod.name}</h3>
+                            {supplier && (
+                              <div style={{ fontSize: '0.82rem', color: 'var(--accent)', fontWeight: '600', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                🚚 Supplier: <strong>{supplier.name}</strong>
+                              </div>
+                            )}
                             <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                               Pool #{pool.id} · {pool.location || 'Your area'} · Opened {new Date(pool.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
                             </div>
                           </div>
-                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                             <StatusBadge status={pool.status} />
                             {pool.deliveryStatus && <StatusBadge status={pool.deliveryStatus} />}
                           </div>
                         </div>
 
+                        {/* Qty progress bar — shown for all joinable pools */}
+                        {isJoinable && (
+                          <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '14px 16px', marginBottom: '14px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '12px', textAlign: 'center' }}>
+                              <div>
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '2px' }}>Min to Close Pool</div>
+                                <div style={{ fontSize: '1rem', fontWeight: '800', color: cur >= minQty ? 'var(--success)' : 'var(--warning)' }}>{minQty} units</div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '2px' }}>Currently Pooled</div>
+                                <div style={{ fontSize: '1rem', fontWeight: '800', color: 'var(--accent)' }}>{cur} units</div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '2px' }}>Max Available</div>
+                                <div style={{ fontSize: '1rem', fontWeight: '800', color: 'var(--text-main)' }}>{maxQty} units</div>
+                              </div>
+                            </div>
+                            <div style={{ height: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '5px', overflow: 'hidden', position: 'relative', marginBottom: '4px' }}>
+                              {/* Min marker */}
+                              <div style={{ position: 'absolute', left: `${minPct}%`, top: 0, bottom: 0, width: '2px', background: 'rgba(251,191,36,0.8)', zIndex: 1 }} />
+                              <div style={{ height: '100%', width: `${progPct}%`, background: cur >= minQty ? 'linear-gradient(to right, #10b981, #34d399)' : 'linear-gradient(to right, #7c3aed, #06b6d4)', borderRadius: '5px', transition: 'width 0.6s ease' }} />
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                              <span>0</span>
+                              <span style={{ color: '#fbbf24', fontWeight: '700' }}>Min: {minQty}</span>
+                              <span>Max: {maxQty}</span>
+                            </div>
+                            
+                            {/* Quantity Fulfillment Info */}
+                            <div style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              fontSize: '0.78rem',
+                              fontWeight: '600',
+                              color: cur >= minQty ? '#34d399' : '#fbbf24',
+                              background: cur >= minQty ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.08)',
+                              border: `1px solid ${cur >= minQty ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)'}`,
+                              borderRadius: '6px',
+                              padding: '8px 12px',
+                              marginBottom: '10px'
+                            }}>
+                              {cur >= minQty ? (
+                                <span>✅ Min quantity met (Fulfillment threshold reached)</span>
+                              ) : (
+                                <span>⚠️ Needs <strong>{minQty - cur}</strong> more units to fulfill min quantity</span>
+                              )}
+                            </div>
+
+                            <CountdownTimer deadline={deadline} />
+                          </div>
+                        )}
+
                         <OrderStepper pool={pool} />
 
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '14px', fontSize: '0.84rem', color: 'var(--text-muted)', flexWrap: 'wrap', gap: '8px' }}>
-                          <span>👥 <strong style={{ color: 'var(--accent)' }}>{pool.participantsCount} retailers</strong> joined · Qty: {pool.currentQuantity || 0}</span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px', fontSize: '0.84rem', color: 'var(--text-muted)', flexWrap: 'wrap', gap: '8px' }}>
+                          <span>👥 <strong style={{ color: 'var(--accent)' }}>{pool.participantsCount} retailers</strong> joined</span>
                           <span>💰 Pool Price: <strong style={{ color: 'var(--success)' }}>₹{prod.groupPrice}</strong> <span style={{ color: 'var(--accent)' }}>({savePct(baseP, prod.groupPrice)}% saved)</span></span>
                         </div>
+
+                        {isJoinable && prod.id && prod.name !== 'Unknown' && (
+                          <button
+                            onClick={() => setCheckout({ product: prod, mode: 'join', pool: pool })}
+                            className="btn btn-accent btn-full"
+                            style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                          >
+                            {SI(Icon.Users, 16)}
+                            {isActive ? 'Join Pool & Order Items' : `Join Pool · ${cur} / ${minQty} min units pooled`}
+                          </button>
+                        )}
                       </div>
                     );
                   })}
@@ -958,67 +1500,76 @@ export default function Dashboard() {
               </div>
 
               {/* Supplier stats */}
-              <div className="stagger" style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '16px', marginBottom: '28px' }}>
-                {[
-                  { label: 'Assigned Orders',   val: pools.length,  icon: Icon.Package, c: 'var(--accent)' },
-                  { label: 'Delivered Today',    val: pools.filter(p=>p.deliveryStatus==='DELIVERED').length, icon: Icon.CheckCircle, c: 'var(--success)' },
-                  { label: 'In Transit',         val: pools.filter(p=>p.deliveryStatus==='SHIPPED').length,   icon: Icon.Truck, c: 'var(--warning)' },
-                ].map(s => (
-                  <div key={s.label} className="stat-card animate-fade-in">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '10px' }}>
-                      <span>{s.label}</span>
-                      <s.icon width={16} height={16} style={{ color: s.c }} />
+              {(() => {
+                const loggedInSupplierId = Number(localStorage.getItem('userId') || '1');
+                const supplierPools = pools.filter(p => Number(p.supplierId) === loggedInSupplierId);
+
+                return (
+                  <>
+                    <div className="stagger" style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '16px', marginBottom: '28px' }}>
+                      {[
+                        { label: 'Assigned Orders',   val: supplierPools.length,  icon: Icon.Package, c: 'var(--accent)' },
+                        { label: 'Delivered Today',    val: supplierPools.filter(p=>p.deliveryStatus==='DELIVERED').length, icon: Icon.CheckCircle, c: 'var(--success)' },
+                        { label: 'In Transit',         val: supplierPools.filter(p=>p.deliveryStatus==='SHIPPED').length,   icon: Icon.Truck, c: 'var(--warning)' },
+                      ].map(s => (
+                        <div key={s.label} className="stat-card animate-fade-in">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '10px' }}>
+                            <span>{s.label}</span>
+                            <s.icon width={16} height={16} style={{ color: s.c }} />
+                          </div>
+                          <div style={{ fontSize: '2rem', fontWeight: '800', color: s.c }}>{s.val}</div>
+                        </div>
+                      ))}
                     </div>
-                    <div style={{ fontSize: '2rem', fontWeight: '800', color: s.c }}>{s.val}</div>
-                  </div>
-                ))}
-              </div>
 
-              {pools.length === 0 ? (
-                <div className="glass-panel" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                  <div style={{ fontSize: '3rem', marginBottom: '16px' }}>📭</div>
-                  <div>No orders assigned yet. Orders appear here once Admin completes matching.</div>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  {pools.map(pool => {
-                    const prod = products.find(p => p.id === pool.productId) || { name: 'Unknown', groupPrice: 0 };
-                    const total = prod.groupPrice * pool.participantsCount;
-                    const ds = pool.deliveryStatus;
-                    return (
-                      <div key={pool.id} className="glass-panel animate-fade-in" style={{ padding: '24px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
-                          <div>
-                            <h3 style={{ fontSize: '1.05rem', fontWeight: '700', marginBottom: '4px' }}>Pooled Batch: {prod.name}</h3>
-                            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Pool #{pool.id} · {pool.participantsCount} retailer batches</div>
-                          </div>
-                          <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: '1.4rem', fontWeight: '800', color: 'var(--success)' }}>₹{total.toLocaleString()}</div>
-                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Total order value</div>
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', flexWrap: 'wrap', gap: '12px' }}>
-                          <div style={{ fontSize: '0.88rem' }}>
-                            Delivery Status: {ds ? <StatusBadge status={ds} /> : <span style={{ color: 'var(--text-muted)' }}>Pending Assignment</span>}
-                          </div>
-                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                            {!ds && (
-                              <>
-                                <button onClick={() => supplierStatusUpdate(pool.id, 'PREPARING')} className="btn btn-success btn-sm">✓ Accept Order</button>
-                                <button className="btn btn-danger btn-sm">✗ Reject</button>
-                              </>
-                            )}
-                            {ds === 'PREPARING' && <button onClick={() => supplierStatusUpdate(pool.id, 'SHIPPED')} className="btn btn-accent btn-sm">📦 Mark as Shipped</button>}
-                            {ds === 'SHIPPED'   && <button onClick={() => supplierStatusUpdate(pool.id, 'DELIVERED')} className="btn btn-success btn-sm">✅ Mark as Delivered</button>}
-                            {ds === 'DELIVERED' && <span style={{ color: 'var(--success)', fontSize: '0.85rem', fontWeight: '600', display:'flex', alignItems:'center', gap:'4px' }}>{SI(Icon.CheckCircle, 14, 'var(--success)')} Fulfilled</span>}
-                          </div>
-                        </div>
+                    {supplierPools.length === 0 ? (
+                      <div className="glass-panel" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                        <div style={{ fontSize: '3rem', marginBottom: '16px' }}>📭</div>
+                        <div>No orders assigned yet. Orders appear here once Admin completes matching or you are assigned to a pool.</div>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        {supplierPools.map(pool => {
+                          const prod = products.find(p => p.id === pool.productId) || { name: 'Unknown', groupPrice: 0 };
+                          const total = prod.groupPrice * pool.participantsCount;
+                          const ds = pool.deliveryStatus;
+                          return (
+                            <div key={pool.id} className="glass-panel animate-fade-in" style={{ padding: '24px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+                                <div>
+                                  <h3 style={{ fontSize: '1.05rem', fontWeight: '700', marginBottom: '4px' }}>Pooled Batch: {prod.name}</h3>
+                                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Pool #{pool.id} · {pool.participantsCount} retailer batches</div>
+                                </div>
+                                <div style={{ textAlign: 'right' }}>
+                                  <div style={{ fontSize: '1.4rem', fontWeight: '800', color: 'var(--success)' }}>₹{total.toLocaleString()}</div>
+                                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Total order value</div>
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', flexWrap: 'wrap', gap: '12px' }}>
+                                <div style={{ fontSize: '0.88rem' }}>
+                                  Delivery Status: {ds ? <StatusBadge status={ds} /> : <span style={{ color: 'var(--text-muted)' }}>Pending Assignment</span>}
+                                </div>
+                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                  {!ds && (
+                                    <>
+                                      <button onClick={() => supplierStatusUpdate(pool.id, 'PREPARING')} className="btn btn-success btn-sm">✓ Accept Order</button>
+                                      <button className="btn btn-danger btn-sm">✗ Reject</button>
+                                    </>
+                                  )}
+                                  {ds === 'PREPARING' && <button onClick={() => supplierStatusUpdate(pool.id, 'SHIPPED')} className="btn btn-accent btn-sm">📦 Mark as Shipped</button>}
+                                  {ds === 'SHIPPED'   && <button onClick={() => supplierStatusUpdate(pool.id, 'DELIVERED')} className="btn btn-success btn-sm">✅ Mark as Delivered</button>}
+                                  {ds === 'DELIVERED' && <span style={{ color: 'var(--success)', fontSize: '0.85rem', fontWeight: '600', display:'flex', alignItems:'center', gap:'4px' }}>{SI(Icon.CheckCircle, 14, 'var(--success)')} Fulfilled</span>}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
 
@@ -1069,8 +1620,8 @@ export default function Dashboard() {
                               {[
                                 { label: 'Base Price',     val: `₹${prod.basePrice}`,          icon: '🏷️' },
                                 { label: 'Pool Price',     val: `₹${prod.groupPrice}`,         icon: '💰' },
-                                { label: 'Min Qty',        val: `${prod.minOrderQuantity} ${prod.unit || 'units'}`, icon: '📋' },
-                                { label: 'Available',      val: `${prod.availableQuantity} ${prod.unit || 'units'}`, icon: '📦' },
+                                { label: 'Min Pool Target', val: `${prod.minOrderQuantity} packs (size: ${prod.unit})`, icon: '📋' },
+                                { label: 'Available Stock', val: `${prod.availableQuantity} packs (size: ${prod.unit})`, icon: '📦' },
                                 { label: 'Delivery',       val: prod.deliveryTimeEstimate ? `${prod.deliveryTimeEstimate} days` : 'N/A', icon: '🚚' },
                                 { label: 'Pool Interest',  val: `${totalPoolParticipants} retailers`, icon: '👥' },
                               ].map(item => (
@@ -1198,40 +1749,59 @@ export default function Dashboard() {
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     {pools.map(pool => {
-                      const prod = products.find(p => p.id === pool.productId) || { name: 'Unknown', category: 'Pharma' };
+                      const prod   = products.find(p => p.id === pool.productId) || { name: 'Unknown', category: 'Pharma' };
+                      const cur    = pool.currentQuantity || 0;
+                      const minQty = prod.minOrderQuantity || 1;
+                      const maxQty = pool.maxQuantity || prod.totalStockQuantity || prod.availableQuantity || minQty;
+                      const deadline = poolDeadline(pool.createdAt);
                       return (
-                        <div key={pool.id} className="animate-fade-in" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: 'rgba(255,255,255,0.015)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', flexWrap: 'wrap', gap: '12px' }}>
-                          <div>
-                            <div style={{ fontWeight: '600', fontSize: '0.92rem', marginBottom: '4px' }}>{prod.name}</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                              <span>Pool #{pool.id}</span>
-                              <StatusBadge status={pool.status} />
-                              {pool.deliveryStatus && <StatusBadge status={pool.deliveryStatus} />}
-                              <span>👥 {pool.participantsCount} retailers</span>
+                        <div key={pool.id} className="animate-fade-in" style={{ padding: '16px 20px', background: 'rgba(255,255,255,0.015)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px', marginBottom: pool.status === 'ACTIVE' ? '10px' : '0' }}>
+                            <div>
+                              <div style={{ fontWeight: '600', fontSize: '0.92rem', marginBottom: '4px' }}>{prod.name}</div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                                <span>Pool #{pool.id}</span>
+                                <StatusBadge status={pool.status} />
+                                {pool.deliveryStatus && <StatusBadge status={pool.deliveryStatus} />}
+                                <span>👥 {pool.participantsCount} retailers · {cur}/{maxQty} units</span>
+                                {pool.status === 'ACTIVE' && <CountdownTimer deadline={deadline} compact />}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                              {pool.status === 'ACTIVE' && (
+                                <button onClick={() => adminStatusUpdate(pool.id, 'CLOSED')} className="btn btn-outline btn-sm" style={{ borderColor: 'rgba(124,58,237,0.4)', color: '#a78bfa' }}>
+                                  🔒 Close Pool
+                                </button>
+                              )}
+                              {pool.status === 'CLOSED' && (
+                                <button onClick={() => setAssignPool(pool)} className="btn btn-accent btn-sm">
+                                  🤖 Assign Supplier
+                                </button>
+                              )}
+                              {pool.status === 'SUPPLIER_ASSIGNED' && pool.deliveryStatus === 'DELIVERED' && (
+                                <button onClick={() => adminStatusUpdate(pool.id, 'DELIVERED')} className="btn btn-success btn-sm">
+                                  ✅ Confirm Delivery
+                                </button>
+                              )}
+                              {pool.status === 'DELIVERED' && (
+                                <span style={{ color: 'var(--success)', fontSize: '0.82rem', fontWeight: '700', display:'flex', alignItems:'center', gap:'4px' }}>
+                                  {SI(Icon.CheckCircle, 14, 'var(--success)')} FULFILLED
+                                </span>
+                              )}
                             </div>
                           </div>
-                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                            {pool.status === 'ACTIVE' && (
-                              <button onClick={() => adminStatusUpdate(pool.id, 'CLOSED')} className="btn btn-outline btn-sm" style={{ borderColor: 'rgba(124,58,237,0.4)', color: '#a78bfa' }}>
-                                🔒 Close Pool
-                              </button>
-                            )}
-                            {pool.status === 'CLOSED' && (
-                              <button onClick={() => setAssignPool(pool)} className="btn btn-accent btn-sm">
-                                🤖 Assign Supplier
-                              </button>
-                            )}
-                            {pool.status === 'SUPPLIER_ASSIGNED' && pool.deliveryStatus === 'DELIVERED' && (
-                              <button onClick={() => adminStatusUpdate(pool.id, 'DELIVERED')} className="btn btn-success btn-sm">
-                                ✅ Confirm Delivery
-                              </button>
-                            )}
-                            {pool.status === 'DELIVERED' && (
-                              <span style={{ color: 'var(--success)', fontSize: '0.82rem', fontWeight: '700', display:'flex', alignItems:'center', gap:'4px' }}>
-                                {SI(Icon.CheckCircle, 14, 'var(--success)')} FULFILLED
+                          {/* Mini progress bar for admin — only on ACTIVE pools */}
+                          {pool.status === 'ACTIVE' && (
+                            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                              <div style={{ flex: 1, height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden', position: 'relative' }}>
+                                <div style={{ position: 'absolute', left: `${Math.min(100, (minQty/maxQty)*100)}%`, top: 0, bottom: 0, width: '2px', background: 'rgba(251,191,36,0.8)' }} />
+                                <div style={{ height: '100%', width: `${Math.min(100,(cur/maxQty)*100)}%`, background: cur >= minQty ? 'linear-gradient(to right,#10b981,#34d399)' : 'linear-gradient(to right,#7c3aed,#06b6d4)', borderRadius: '3px' }} />
+                              </div>
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                Min {minQty} · Cur {cur} · Max {maxQty}
                               </span>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -1266,6 +1836,9 @@ export default function Dashboard() {
       {checkout && (
         <CheckoutModal
           product={checkout.product}
+          supplier={getMergedSuppliers().find(s => Number(s.id) === Number(checkout.product.supplierId) || Number(s.supplierId) === Number(checkout.product.supplierId))}
+          mode={checkout.mode || 'create'}
+          pool={checkout.pool || null}
           token={token}
           onClose={() => setCheckout(null)}
           onSuccess={(data) => { setCheckout(null); handleCheckoutSuccess(data); }}

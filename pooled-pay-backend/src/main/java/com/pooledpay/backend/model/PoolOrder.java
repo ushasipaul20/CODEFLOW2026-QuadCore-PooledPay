@@ -3,6 +3,7 @@ package com.pooledpay.backend.model;
 import jakarta.persistence.*;
 import lombok.Data;
 import java.time.LocalDateTime;
+import com.fasterxml.jackson.annotation.JsonFormat;
 
 @Data
 @Entity
@@ -31,5 +32,8 @@ public class PoolOrder {
 
     private String category;
 
+    private Integer maxQuantity;   // Pool closes when currentQuantity >= maxQuantity
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss")
     private LocalDateTime createdAt = LocalDateTime.now();
 }

@@ -48,6 +48,15 @@ public class PoolController {
         Long userId    = Long.valueOf(orderRequest.get("userId").toString());
         Long productId = Long.valueOf(orderRequest.get("productId").toString());
         Integer quantity = Integer.valueOf(orderRequest.get("quantity").toString());
+        
+        Long poolId = null;
+        if (orderRequest.containsKey("poolId") && orderRequest.get("poolId") != null) {
+            try {
+                poolId = Long.valueOf(orderRequest.get("poolId").toString());
+            } catch (Exception e) {
+                // ignore invalid format
+            }
+        }
 
         User user       = userRepository.findById(userId).orElse(null);
         Product product = productRepository.findById(productId).orElse(null);
@@ -58,30 +67,45 @@ public class PoolController {
 
         String location = user.getLocation() != null ? user.getLocation() : "Unknown";
 
-        // Look for an existing ACTIVE pool for same product + location
-        Optional<PoolOrder> existingPool =
-            poolOrderRepository.findFirstByProductIdAndLocationAndStatus(productId, location, "ACTIVE");
+        PoolOrder poolOrder = null;
+        if (poolId != null) {
+            poolOrder = poolOrderRepository.findById(poolId).orElse(null);
+        }
 
-        PoolOrder poolOrder;
-        if (existingPool.isPresent()) {
-            // Join the existing pool
-            poolOrder = existingPool.get();
+        // If a pool was found by ID and is not CLOSED or DELIVERED, join it
+        if (poolOrder != null && !"CLOSED".equals(poolOrder.getStatus()) && !"DELIVERED".equals(poolOrder.getStatus())) {
             poolOrder.setParticipantsCount(poolOrder.getParticipantsCount() + 1);
             poolOrder.setCurrentQuantity(poolOrder.getCurrentQuantity() + quantity);
         } else {
-            // Create a brand new pool
-            poolOrder = new PoolOrder();
-            poolOrder.setProductId(productId);
-            poolOrder.setLocation(location);
-            poolOrder.setStatus("ACTIVE");
-            poolOrder.setCategory(product.getCategory());
-            poolOrder.setParticipantsCount(1);
-            poolOrder.setCurrentQuantity(quantity);
-            poolOrder.setCreatedAt(LocalDateTime.now());
+            // Otherwise, look for an existing ACTIVE or FULFILLED pool for the same product + location
+            Optional<PoolOrder> existingPool =
+                poolOrderRepository.findFirstByProductIdAndLocationAndStatus(productId, location, "ACTIVE");
+            
+            if (!existingPool.isPresent()) {
+                existingPool = poolOrderRepository
+                    .findFirstByProductIdAndLocationAndStatus(productId, location, "FULFILLED");
+            }
+
+            if (existingPool.isPresent()) {
+                // Join the matched pool
+                poolOrder = existingPool.get();
+                poolOrder.setParticipantsCount(poolOrder.getParticipantsCount() + 1);
+                poolOrder.setCurrentQuantity(poolOrder.getCurrentQuantity() + quantity);
+            } else {
+                // Create a brand new pool
+                poolOrder = new PoolOrder();
+                poolOrder.setProductId(productId);
+                poolOrder.setLocation(location);
+                poolOrder.setStatus("ACTIVE");
+                poolOrder.setCategory(product.getCategory());
+                poolOrder.setParticipantsCount(1);
+                poolOrder.setCurrentQuantity(quantity);
+                poolOrder.setCreatedAt(LocalDateTime.now());
+            }
         }
 
-        // Auto-fulfill if min order quantity reached
-        if (poolOrder.getCurrentQuantity() >= product.getMinOrderQuantity()) {
+        // Auto-fulfill if min order quantity reached (only transition from ACTIVE)
+        if ("ACTIVE".equals(poolOrder.getStatus()) && poolOrder.getCurrentQuantity() >= product.getMinOrderQuantity()) {
             poolOrder.setStatus("FULFILLED");
             poolOrder.setSupplierId(product.getSupplierId());
             poolOrder.setSupplierStatus("PENDING");
