@@ -2,6 +2,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8082';
+
+
 // ─── ICONS (inline SVG — no extra dep) ──────────────────────────
 const Icon = {
   ShoppingBag: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>,
@@ -478,7 +481,7 @@ function AddProductForm({ token, onSuccess }) {
         supplierId: uid ? Number(uid) : 1
       };
       console.log('[AddProduct] Submitting payload:', JSON.stringify(payload));
-      const res = await fetch('http://localhost:8082/api/products/add', {
+      const res = await fetch(API_BASE + '/api/products/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(payload),
@@ -635,7 +638,7 @@ function AiCopilot() {
 
   useEffect(() => {
     // Fetch History
-    fetch(`http://localhost:8082/api/ai/history?userId=${userId}`, {
+    fetch(`${API_BASE}/api/ai/history?userId=${userId}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
       .then(res => res.json())
@@ -652,7 +655,7 @@ function AiCopilot() {
     setLoading(true);
     try {
       const payload = { userId: Number(userId), ...formData };
-      const res = await fetch("http://localhost:8082/api/ai/predict-risk", {
+      const res = await fetch(API_BASE + "/api/ai/predict-risk", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -680,7 +683,7 @@ function AiCopilot() {
     setChatLoading(true);
 
     try {
-      const res = await fetch("http://localhost:8082/api/ai/chat", {
+      const res = await fetch(API_BASE + "/api/ai/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -926,9 +929,9 @@ export default function Dashboard() {
       const storedRole = localStorage.getItem('userRole') || user.role;
 
       const [pRes, poolRes, sRes] = await Promise.all([
-        fetch('http://localhost:8082/api/products', { signal: AbortSignal.timeout(3000) }),
-        fetch('http://localhost:8082/api/pools', { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(3000) }),
-        fetch('http://localhost:8082/api/supplier/list', { signal: AbortSignal.timeout(3000) }),
+        fetch(API_BASE + '/api/products', { signal: AbortSignal.timeout(3000) }),
+        fetch(API_BASE + '/api/pools', { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(3000) }),
+        fetch(API_BASE + '/api/supplier/list', { signal: AbortSignal.timeout(3000) }),
       ]);
       if (pRes.ok) {
         const prodData = await pRes.json();
@@ -950,7 +953,7 @@ export default function Dashboard() {
       }
       // Fetch supplier's own products
       if (storedRole === 'SUPPLIER') {
-        const myRes = await fetch(`http://localhost:8082/api/products/supplier/${uid}`, { signal: AbortSignal.timeout(3000) });
+        const myRes = await fetch(`${API_BASE}/api/products/supplier/${uid}`, { signal: AbortSignal.timeout(3000) });
         if (myRes.ok) setMyProducts(await myRes.json());
       }
     } catch { /* demo fallback */ }
@@ -1004,7 +1007,7 @@ export default function Dashboard() {
     const userId = localStorage.getItem('userId') || '1';
 
     try {
-      const response = await fetch('http://localhost:8082/api/pools/order', {
+      const response = await fetch(API_BASE + '/api/pools/order', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1089,7 +1092,7 @@ export default function Dashboard() {
   const adminStatusUpdate = async (poolId, status) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`http://localhost:8082/api/pools/${poolId}/status`, {
+      const res = await fetch(`${API_BASE}/api/pools/${poolId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1113,7 +1116,7 @@ export default function Dashboard() {
   const assignSupplier = async (poolId, suppId, suppName) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`http://localhost:8082/api/pools/${poolId}/status`, {
+      const res = await fetch(`${API_BASE}/api/pools/${poolId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1147,7 +1150,7 @@ export default function Dashboard() {
       if (ds === 'DELIVERED') {
         payload.status = 'DELIVERED';
       }
-      const res = await fetch(`http://localhost:8082/api/pools/${poolId}/status`, {
+      const res = await fetch(`${API_BASE}/api/pools/${poolId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1171,7 +1174,7 @@ export default function Dashboard() {
   const wholesalerAcceptPool = async (poolId) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`http://localhost:8082/api/pools/${poolId}/status`, {
+      const res = await fetch(`${API_BASE}/api/pools/${poolId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1195,7 +1198,7 @@ export default function Dashboard() {
   const adminApprovePool = async (poolId) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`http://localhost:8082/api/pools/${poolId}/status`, {
+      const res = await fetch(`${API_BASE}/api/pools/${poolId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1219,7 +1222,7 @@ export default function Dashboard() {
   const adminReleasePayment = async (poolId) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`http://localhost:8082/api/pools/${poolId}/status`, {
+      const res = await fetch(`${API_BASE}/api/pools/${poolId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1943,7 +1946,7 @@ export default function Dashboard() {
                                 const newQty = prompt(`Update available quantity for "${prod.name}" (current: ${prod.availableQuantity}):`);
                                 if (newQty === null || isNaN(+newQty)) return;
                                 try {
-                                  const res = await fetch(`http://localhost:8082/api/products/${prod.id}`, {
+                                  const res = await fetch(`${API_BASE}/api/products/${prod.id}`, {
                                     method: 'PUT',
                                     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                                     body: JSON.stringify({ ...prod, availableQuantity: +newQty }),
@@ -1964,7 +1967,7 @@ export default function Dashboard() {
                               onClick={async () => {
                                 if (!confirm(`Delete "${prod.name}"?`)) return;
                                 try {
-                                  await fetch(`http://localhost:8082/api/products/${prod.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+                                  await fetch(`${API_BASE}/api/products/${prod.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
                                 } catch {}
                                 setMyProducts(prev => prev.filter(p => p.id !== prod.id));
                                 setProducts(prev => prev.filter(p => p.id !== prod.id));

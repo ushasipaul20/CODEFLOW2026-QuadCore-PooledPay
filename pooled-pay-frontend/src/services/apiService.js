@@ -6,7 +6,7 @@
 // mock data so the demo never breaks.
 // ═══════════════════════════════════════════════════════════════════
 
-const BASE_URL = 'http://localhost:8080';
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8082';
 const TIMEOUT_MS = 3000;
 
 // ─── MOCK DATA (demo fallback) ───────────────────────────────────

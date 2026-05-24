@@ -24,6 +24,8 @@ function FloatingOrbs() {
   );
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8082';
+
 export default function Auth({ type }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -53,8 +55,8 @@ export default function Auth({ type }) {
 
     try {
       const url  = isLogin
-        ? 'http://localhost:8082/api/auth/login'
-        : 'http://localhost:8082/api/auth/signup';
+        ? `${API_BASE}/api/auth/login`
+        : `${API_BASE}/api/auth/signup`;
       const body = isLogin
         ? { username, password }
         : { username, password, role, location: location || 'Mumbai' };
@@ -73,7 +75,7 @@ export default function Auth({ type }) {
           navigate('/dashboard');
         } else {
           // After signup, auto-login immediately
-          const loginRes = await fetch('http://localhost:8082/api/auth/login', {
+          const loginRes = await fetch(`${API_BASE}/api/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password }),

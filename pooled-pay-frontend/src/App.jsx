@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Auth from './components/Auth';
 import Dashboard from './components/Dashboard';
 import './index.css';
@@ -6,7 +6,7 @@ import './App.css';
 
 function App() {
   return (
-    <BrowserRouter>
+    <Router>
       <Routes>
         <Route path="/"         element={<Navigate to="/login" replace />} />
         <Route path="/login"    element={<Auth type="login" />} />
@@ -14,7 +14,7 @@ function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="*"         element={<Navigate to="/login" replace />} />
       </Routes>
-    </BrowserRouter>
+    </Router>
   );
 }
 
