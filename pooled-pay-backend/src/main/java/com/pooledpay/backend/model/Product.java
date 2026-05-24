@@ -32,8 +32,12 @@ public class Product {
     @Column(nullable = false)
     private Integer totalStockQuantity;
 
+    /** Minimum TOTAL pool quantity (wholesaler threshold to accept bulk order) */
     @Column(nullable = false)
     private Integer minOrderQuantity;
+
+    /** Minimum units each individual retailer must order when joining a pool */
+    private Integer minRetailerQuantity;
 
     @Column(nullable = false)
     private Integer availableQuantity;

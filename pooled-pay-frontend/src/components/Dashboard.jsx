@@ -207,7 +207,8 @@ function OrderStepper({ pool }) {
 
 // ─── CHECKOUT MODAL (Razorpay + Unit Selection) ──────────────────
 function CheckoutModal({ product, supplier, mode = 'create', pool = null, token, onClose, onSuccess }) {
-  const minQty = product.minOrderQuantity || 1;
+  const minQty = product.minRetailerQuantity || 1;
+  const poolMinQty = product.minOrderQuantity || 1;
   const [qty, setQty]           = useState(minQty);
   const [result, setResult]     = useState(null);
   const [loading, setLoading]   = useState(false);
@@ -297,7 +298,7 @@ function CheckoutModal({ product, supplier, mode = 'create', pool = null, token,
                   <span>👥 {pool.participantsCount} retailers in</span>
                 </div>
                 <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                  {pool.currentQuantity || 0} / {pool.maxQuantity || '?'} units pooled so far
+                  {pool.currentQuantity || 0} / {pool.maxQuantity || '?'} units pooled so far (Min target: {poolMinQty})
                 </div>
               </div>
             )}
@@ -316,7 +317,7 @@ function CheckoutModal({ product, supplier, mode = 'create', pool = null, token,
                 style={{ fontSize: '1.1rem', fontWeight: '700' }}
               />
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '5px' }}>
-                <span>Min order: <strong style={{ color: 'var(--warning)' }}>{minQty} {product.unit}</strong></span>
+                <span>Min per retailer: <strong style={{ color: 'var(--warning)' }}>{minQty} {product.unit}</strong></span>
                 <span>Pool price: <strong style={{ color: 'var(--success)' }}>₹{groupP} / unit</strong></span>
               </div>
               {isExceeded && (
@@ -325,7 +326,7 @@ function CheckoutModal({ product, supplier, mode = 'create', pool = null, token,
                 </div>
               )}
               <div style={{ marginTop: '6px', fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)', borderRadius: '6px', padding: '6px 10px' }}>
-                ℹ️ You will be counted as <strong style={{ color: '#a78bfa' }}>1 retailer</strong> in this pool regardless of units ordered.
+                ℹ️ Wholesaler pool min target is <strong style={{ color: '#a78bfa' }}>{poolMinQty} units</strong> overall. Individual order min is <strong style={{ color: '#a78bfa' }}>{minQty} units</strong>.
               </div>
             </div>
 
@@ -450,7 +451,7 @@ function AddProductForm({ token, onSuccess }) {
   const [formData, setFormData] = useState({
     name: '', category: 'Pharma', description: '', unit: 'kg',
     basePrice: '', groupPrice: '', totalStockQuantity: '',
-    minOrderQuantity: '', availableQuantity: '', deliveryTimeEstimate: '', batchSize: ''
+    minOrderQuantity: '', minRetailerQuantity: '1', availableQuantity: '', deliveryTimeEstimate: '', batchSize: ''
   });
   const [loading, setLoading] = useState(false);
 
@@ -470,6 +471,7 @@ function AddProductForm({ token, onSuccess }) {
         groupPrice: +formData.groupPrice,
         totalStockQuantity: +formData.totalStockQuantity,
         minOrderQuantity: +formData.minOrderQuantity,
+        minRetailerQuantity: +formData.minRetailerQuantity || 1,
         availableQuantity: +formData.availableQuantity,
         batchSize: +formData.batchSize || 0,
         deliveryTimeEstimate: formData.deliveryTimeEstimate || null,
@@ -508,7 +510,8 @@ function AddProductForm({ token, onSuccess }) {
         <div><label className="text-muted" style={{ fontSize: '0.8rem' }}>Individual Base Price (₹)</label><input required type="number" className="input-field" name="basePrice" onChange={handleChange} /></div>
         <div><label className="text-muted" style={{ fontSize: '0.8rem' }}>Pooled Group Price (₹)</label><input required type="number" className="input-field" name="groupPrice" onChange={handleChange} /></div>
         <div><label className="text-muted" style={{ fontSize: '0.8rem' }}>Total Stock Quantity</label><input required type="number" className="input-field" name="totalStockQuantity" onChange={handleChange} /></div>
-        <div><label className="text-muted" style={{ fontSize: '0.8rem' }}>Min Order Quantity</label><input required type="number" className="input-field" name="minOrderQuantity" onChange={handleChange} /></div>
+        <div><label className="text-muted" style={{ fontSize: '0.8rem' }}>Min Pool Order Quantity (Total to Fulfill)</label><input required type="number" className="input-field" name="minOrderQuantity" onChange={handleChange} /></div>
+        <div><label className="text-muted" style={{ fontSize: '0.8rem' }}>Min Retailer Quantity (Per Retailer Order)</label><input required type="number" className="input-field" name="minRetailerQuantity" defaultValue="1" onChange={handleChange} /></div>
         <div><label className="text-muted" style={{ fontSize: '0.8rem' }}>Available Quantity</label><input required type="number" className="input-field" name="availableQuantity" onChange={handleChange} /></div>
         <div><label className="text-muted" style={{ fontSize: '0.8rem' }}>Delivery Time Estimate (days)</label><input className="input-field" name="deliveryTimeEstimate" onChange={handleChange} /></div>
         <div><label className="text-muted" style={{ fontSize: '0.8rem' }}>Batch Size</label><input type="number" className="input-field" name="batchSize" onChange={handleChange} /></div>
@@ -1067,6 +1070,54 @@ export default function Dashboard() {
     }
     setPools(prev => prev.map(p => p.id === poolId ? { ...p, deliveryStatus: ds, status: ds === 'DELIVERED' ? 'DELIVERED' : p.status } : p));
     showToast(`📦 Order status updated → ${ds} (Demo)`);
+  };
+
+  const wholesalerAcceptPool = async (poolId) => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`http://localhost:8080/api/pools/${poolId}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ status: 'PENDING_ADMIN_APPROVAL' })
+      });
+      if (res.ok) {
+        const updatedPool = await res.json();
+        setPools(prev => prev.map(p => p.id === poolId ? updatedPool : p));
+        showToast(`🙌 Bulk order accepted! Reached Admin for approval & payment release.`);
+        return;
+      }
+    } catch (err) {
+      console.warn("Backend accept failed, using demo fallback:", err);
+    }
+    setPools(prev => prev.map(p => p.id === poolId ? { ...p, status: 'PENDING_ADMIN_APPROVAL', supplierStatus: 'ACCEPTED' } : p));
+    showToast(`🙌 Bulk order accepted! Awaiting Admin approval (Demo)`);
+  };
+
+  const adminApprovePool = async (poolId) => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`http://localhost:8080/api/pools/${poolId}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ status: 'SUPPLIER_ASSIGNED' })
+      });
+      if (res.ok) {
+        const updatedPool = await res.json();
+        setPools(prev => prev.map(p => p.id === poolId ? updatedPool : p));
+        showToast(`✅ Bulk order approved! Payment released to wholesaler.`);
+        return;
+      }
+    } catch (err) {
+      console.warn("Backend approval failed, using demo fallback:", err);
+    }
+    setPools(prev => prev.map(p => p.id === poolId ? { ...p, status: 'SUPPLIER_ASSIGNED', paymentStatus: 'PAID', deliveryStatus: 'PREPARING' } : p));
+    showToast(`✅ Bulk order approved & payment released! (Demo)`);
   };
 
   const adminReleasePayment = async (poolId) => {
@@ -1650,27 +1701,31 @@ export default function Dashboard() {
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                         {supplierPools.map(pool => {
-                          const prod = products.find(p => p.id === pool.productId) || { name: 'Unknown', groupPrice: 0 };
-                          const total = prod.groupPrice * pool.participantsCount;
+                          const prod = products.find(p => p.id === pool.productId) || { name: 'Unknown', groupPrice: 0, minOrderQuantity: 1 };
+                          const total = prod.groupPrice * pool.currentQuantity;
                           const ds = pool.deliveryStatus;
+                          const minMet = pool.currentQuantity >= (prod.minOrderQuantity || 1);
                           return (
                             <div key={pool.id} className="glass-panel animate-fade-in" style={{ padding: '24px' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
                                 <div>
-                                  <h3 style={{ fontSize: '1.05rem', fontWeight: '700', marginBottom: '4px' }}>Pooled Batch: {prod.name}</h3>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                                    <h3 style={{ fontSize: '1.05rem', fontWeight: '700', margin: 0 }}>Pooled Batch: {prod.name}</h3>
+                                    <StatusBadge status={pool.status} />
+                                  </div>
                                   <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                                     Pool #{pool.id} · <strong>{pool.participantsCount} orders</strong> placed
                                   </div>
                                   <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                                    📈 Total Ordered Quantity: <strong>{pool.currentQuantity} units</strong>
+                                    📈 Total Ordered Quantity: <strong>{pool.currentQuantity} units</strong> (Min target to fulfill: {prod.minOrderQuantity} units)
                                   </div>
                                   <div style={{ fontSize: '0.78rem', color: '#fbbf24', marginTop: '2px' }}>
-                                    Remaining Available Pool Quantity: <strong>{pool.maxQuantity - pool.currentQuantity} units</strong>
+                                    Remaining Available Pool Capacity: <strong>{pool.maxQuantity - pool.currentQuantity} units</strong>
                                   </div>
                                 </div>
                                 <div style={{ textAlign: 'right' }}>
                                   <div style={{ fontSize: '1.4rem', fontWeight: '800', color: 'var(--success)' }}>₹{total.toLocaleString()}</div>
-                                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Total order value</div>
+                                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Total order value (Qty × Price)</div>
                                   <div style={{ fontSize: '0.75rem', fontWeight: '700', color: pool.paymentStatus === 'PAID' ? '#34d399' : '#fbbf24', marginTop: '4px' }}>
                                     {pool.paymentStatus === 'PAID' ? '💳 PAID BY ADMIN' : '💳 AWAITING ADMIN PAYMENT'}
                                   </div>
@@ -1679,23 +1734,41 @@ export default function Dashboard() {
 
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', flexWrap: 'wrap', gap: '12px' }}>
                                 <div style={{ fontSize: '0.88rem' }}>
-                                  Delivery Status: {ds ? <StatusBadge status={ds} /> : <span style={{ color: 'var(--text-muted)' }}>Pending Assignment</span>}
+                                  Delivery Status: {ds ? <StatusBadge status={ds} /> : <span style={{ color: 'var(--text-muted)' }}>Awaiting Wholesaler Acceptance</span>}
                                 </div>
                                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                                  {!ds && (pool.status === 'FULFILLED' || pool.status === 'CLOSED' || pool.status === 'SUPPLIER_ASSIGNED') && (
-                                    <>
-                                      <button onClick={() => supplierStatusUpdate(pool.id, 'PREPARING')} className="btn btn-success btn-sm">✓ Accept Order</button>
-                                      <button className="btn btn-danger btn-sm">✗ Reject</button>
-                                    </>
-                                  )}
-                                  {!ds && pool.status === 'ACTIVE' && (
+                                  {pool.status === 'ACTIVE' && (
                                     <span style={{ color: '#fbbf24', fontSize: '0.82rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                      ⏳ Forming Pool (Awaiting Min Qty)
+                                      ⏳ Pool Forming (Awaiting 24h deadline or max capacity)
                                     </span>
                                   )}
-                                  {ds === 'PREPARING' && <button onClick={() => supplierStatusUpdate(pool.id, 'SHIPPED')} className="btn btn-accent btn-sm">📦 Mark as Shipped</button>}
-                                  {ds === 'SHIPPED'   && <button onClick={() => supplierStatusUpdate(pool.id, 'DELIVERED')} className="btn btn-success btn-sm">✅ Mark as Delivered</button>}
-                                  {ds === 'DELIVERED' && <span style={{ color: 'var(--success)', fontSize: '0.85rem', fontWeight: '600', display:'flex', alignItems:'center', gap:'4px' }}>{SI(Icon.CheckCircle, 14, 'var(--success)')} Fulfilled</span>}
+                                  {pool.status === 'CLOSED' && (
+                                    <>
+                                      {minMet ? (
+                                        <button onClick={() => wholesalerAcceptPool(pool.id)} className="btn btn-success btn-sm" style={{ boxShadow: '0 0 12px rgba(16,185,129,0.3)' }}>
+                                          ✓ Accept Bulk Order & Request Admin Payment
+                                        </button>
+                                      ) : (
+                                        <span style={{ color: 'var(--danger)', fontSize: '0.8rem', fontWeight: '600' }}>
+                                          ❌ Unfulfilled (Order qty {pool.currentQuantity} is below min target {prod.minOrderQuantity})
+                                        </span>
+                                      )}
+                                    </>
+                                  )}
+                                  {pool.status === 'PENDING_ADMIN_APPROVAL' && (
+                                    <span style={{ color: '#fbbf24', fontSize: '0.82rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      🕐 Reached Admin. Awaiting approval & payment release.
+                                    </span>
+                                  )}
+                                  {pool.status === 'SUPPLIER_ASSIGNED' && (
+                                    <>
+                                      {ds === 'PREPARING' && <button onClick={() => supplierStatusUpdate(pool.id, 'SHIPPED')} className="btn btn-accent btn-sm">📦 Mark as Shipped</button>}
+                                      {ds === 'SHIPPED'   && <button onClick={() => supplierStatusUpdate(pool.id, 'DELIVERED')} className="btn btn-success btn-sm">✅ Mark as Delivered</button>}
+                                    </>
+                                  )}
+                                  {pool.status === 'DELIVERED' && (
+                                    <span style={{ color: 'var(--success)', fontSize: '0.85rem', fontWeight: '600', display:'flex', alignItems:'center', gap:'4px' }}>{SI(Icon.CheckCircle, 14, 'var(--success)')} Fulfilled</span>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -1910,8 +1983,13 @@ export default function Dashboard() {
                                 </button>
                               )}
                               {pool.status === 'CLOSED' && (
-                                <button onClick={() => setAssignPool(pool)} className="btn btn-accent btn-sm">
-                                  🤖 Assign Supplier
+                                <span style={{ color: '#fbbf24', fontSize: '0.82rem', fontWeight: '600' }}>
+                                  Awaiting Wholesaler Acceptance
+                                </span>
+                              )}
+                              {pool.status === 'PENDING_ADMIN_APPROVAL' && (
+                                <button onClick={() => adminApprovePool(pool.id)} className="btn btn-success btn-sm" style={{ boxShadow: '0 0 12px rgba(16,185,129,0.3)' }}>
+                                  ✅ Approve Bulk Order & Pay Wholesaler
                                 </button>
                               )}
                               {pool.status === 'SUPPLIER_ASSIGNED' && pool.deliveryStatus === 'DELIVERED' && (
@@ -1925,12 +2003,12 @@ export default function Dashboard() {
                                 </span>
                               )}
 
-                              {/* Pay Wholesaler Action */}
-                              {(pool.status === 'SUPPLIER_ASSIGNED' || pool.status === 'FULFILLED' || pool.status === 'DELIVERED') && pool.deliveryStatus && (
+                              {/* Pay Wholesaler Action / Payment Status Display */}
+                              {(pool.status === 'SUPPLIER_ASSIGNED' || pool.status === 'DELIVERED') && (
                                 <>
                                   {pool.paymentStatus === 'PAID' ? (
                                     <span style={{ color: 'var(--success)', fontSize: '0.78rem', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(16,185,129,0.08)', padding: '4px 8px', borderRadius: '4px', border: '1px solid rgba(16,185,129,0.15)' }}>
-                                      💳 Paid (₹{(prod.groupPrice * cur).toLocaleString()})
+                                      💳 Paid to Wholesaler (₹{(prod.groupPrice * cur).toLocaleString()})
                                     </span>
                                   ) : (
                                     <button onClick={() => adminReleasePayment(pool.id)} className="btn btn-success btn-sm" style={{ gap: '4px' }}>
